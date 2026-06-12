@@ -1,0 +1,741 @@
+const SS = SpreadsheetApp.getActiveSpreadsheet();
+
+const GEMINI_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-3.1-flash-lite",
+  "gemini-2.5-flash-lite"
+];
+
+const DEFAULT_FAMILY_ID = 'fam_default';
+const DEFAULT_CHILD_ID = 'child_1';
+
+function doGet(e) {
+  try { initSpreadsheet(); } catch (err) { Logger.log("初期化エラー: " + err.message); }
+
+  const action = e.parameter.action;
+  if (action === 'getLogs') return json(getLogsFiltered(e.parameter));
+  if (action === 'getFacilities') return json(searchNearbyFacilities_(e.parameter));
+  if (action === 'getMilestones') return json(getMilestonesFiltered(e.parameter));
+  if (action === 'getFamilies') return json(getData('families'));
+  if (action === 'getChildren') return json(getChildrenFiltered(e.parameter));
+  if (action === 'getSettings') return json(getSettingsMap(e.parameter.familyId || DEFAULT_FAMILY_ID));
+  if (action === 'getSuggestions') return json(getLogSuggestions(e.parameter));
+
+  return HtmlService.createTemplateFromFile('Index')
+    .evaluate()
+    .setTitle('ChildCompass')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function doPost(e) {
+  try { initSpreadsheet(); } catch (err) { Logger.log("初期化エラー: " + err.message); }
+  const data = JSON.parse(e.postData.contents);
+  return json(handleAction(data.action, data));
+}
+
+function handleAction(actionName, params) {
+  switch (actionName) {
+    case 'addLog': return addLog_(params);
+    case 'toggleMilestone': return toggleMilestone_(params);
+    case 'hideMilestone': return hideMilestone_(params);
+    case 'addMilestone': return addMilestone_(params);
+    case 'customizeMilestonesAI': return customizeMilestonesAI_(params);
+    case 'askGemini': return { reply: askGemini(params.question, params.familyId, params.childId) };
+    case 'summarizeLogs': return { summary: summarizeLogs(params.familyId, params.childId) };
+    case 'searchNearbyFacilities': return searchNearbyFacilities_(params);
+    case 'saveSettings': return saveSettings_(params);
+    case 'addFamily': return addFamily_(params);
+    case 'addChild': return addChild_(params);
+    case 'getLogs': return getLogsFiltered(params);
+    case 'getMilestones': return getMilestonesFiltered(params);
+    case 'getChildren': return getChildrenFiltered(params);
+    case 'getFamilies': return getData('families');
+    case 'getSettings': return getSettingsMap(params.familyId || DEFAULT_FAMILY_ID);
+    case 'getSuggestions': return getLogSuggestions(params);
+    default: return { error: 'invalid_action' };
+  }
+}
+
+function executeActionFromRun(actionName, paramsJson) {
+  try { initSpreadsheet(); } catch (err) { Logger.log("初期化エラー: " + err.message); }
+  const params = paramsJson ? JSON.parse(paramsJson) : {};
+  const result = handleAction(actionName, params);
+  if (result && result.error) throw new Error(result.error);
+  return result;
+}
+
+// ─── スプレッドシート初期化 ─────────────────────────────────────
+function initSpreadsheet() {
+  const activeSS = SpreadsheetApp.getActiveSpreadsheet();
+  if (!activeSS) throw new Error("Active Spreadsheet is not accessible.");
+
+  ensureSheet('logs', ['timestamp', 'type', 'note', 'family_id', 'child_id'], () => {
+    const ts = formatNowJst();
+    activeSS.getSheetByName('logs').appendRow([ts, '授乳', '量: 100ml, 時間: 10分', DEFAULT_FAMILY_ID, DEFAULT_CHILD_ID]);
+  }, upgradeLogsSheet);
+
+  ensureFamiliesAndChildren(activeSS);
+
+  ensureSheet('settings', ['family_id', 'key', 'value'], () => {
+    const sheet = activeSS.getSheetByName('settings');
+    const defaults = [
+      [DEFAULT_FAMILY_ID, 'feed_interval_hours', '3'],
+      [DEFAULT_FAMILY_ID, 'sleep_interval_hours', '2'],
+      [DEFAULT_FAMILY_ID, 'suggest_mode', 'average'],
+      [DEFAULT_FAMILY_ID, 'milk_ml_suggestions', '100,120,140,160,200'],
+      [DEFAULT_FAMILY_ID, 'sleep_min_suggestions', '30,60,90,120']
+    ];
+    defaults.forEach(r => sheet.appendRow(r));
+  });
+
+  initMilestonesSheet(activeSS);
+}
+
+function upgradeLogsSheet(sheet) {
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (header.indexOf('family_id') === -1) {
+    sheet.getRange(1, 4, 1, 5).setValues([['family_id', 'child_id']]);
+    const rows = sheet.getLastRow();
+    if (rows > 1) {
+      const count = rows - 1;
+      sheet.getRange(2, 4, rows, 5).setValues(
+        Array(count).fill(null).map(() => [DEFAULT_FAMILY_ID, DEFAULT_CHILD_ID])
+      );
+    }
+  }
+}
+
+function ensureFamiliesAndChildren(ss) {
+  ensureSheet('families', ['id', 'name'], () => {
+    ss.getSheetByName('families').appendRow([DEFAULT_FAMILY_ID, 'わが家']);
+  });
+  ensureSheet('children', ['id', 'family_id', 'name', 'birth_date'], () => {
+    ss.getSheetByName('children').appendRow([DEFAULT_CHILD_ID, DEFAULT_FAMILY_ID, 'お子さま', '']);
+  });
+}
+
+function ensureSheet(name, headers, seedFn, upgradeFn) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    sheet.appendRow(headers);
+    if (seedFn) seedFn();
+    return;
+  }
+  if (upgradeFn) upgradeFn(sheet);
+}
+
+function initMilestonesSheet(ss) {
+  let msSheet = ss.getSheetByName('milestones');
+  const needRebuild = !msSheet || msSheet.getLastRow() < 80;
+  if (needRebuild) {
+    if (msSheet) ss.deleteSheet(msSheet);
+    msSheet = ss.insertSheet('milestones');
+    msSheet.appendRow(['id', 'title', 'completed', 'category', 'hidden', 'is_custom', 'family_id']);
+    getInitialMilestonesSeed().forEach(m => msSheet.appendRow(m));
+  } else {
+    const header = msSheet.getRange(1, 1, 1, msSheet.getLastColumn()).getValues()[0];
+    if (header.indexOf('hidden') === -1) {
+      msSheet.getRange(1, 5, 1, 7).setValues([['hidden', 'is_custom', 'family_id']]);
+    }
+  }
+}
+
+// ─── ログ ─────────────────────────────────────────────────────
+function addLog_(params) {
+  const sheet = SS.getSheetByName('logs');
+  const timestamp = params.timestamp
+    ? normalizeTimestamp(params.timestamp)
+    : formatNowJst();
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  const childId = params.childId || DEFAULT_CHILD_ID;
+  sheet.appendRow([timestamp, params.type, params.note || '', familyId, childId]);
+  updateSuggestionsFromNote(familyId, params.type, params.note || '');
+  return { status: 'success' };
+}
+
+function normalizeTimestamp(ts) {
+  if (!ts) return formatNowJst();
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return formatNowJst();
+  return Utilities.formatDate(d, "Asia/Tokyo", "yyyy/MM/dd HH:mm:ss");
+}
+
+function formatNowJst() {
+  return Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy/MM/dd HH:mm:ss");
+}
+
+function getLogsFiltered(params) {
+  const logs = getData('logs');
+  const familyId = params && params.familyId;
+  const childId = params && params.childId;
+  return logs.filter(l => {
+    if (familyId && l.family_id && l.family_id !== familyId) return false;
+    if (childId && l.child_id && l.child_id !== childId) return false;
+    return true;
+  });
+}
+
+function updateSuggestionsFromNote(familyId, type, note) {
+  const settings = getSettingsMap(familyId);
+  if (type === '授乳') {
+    const ml = extractNumber(note, '量');
+    const min = extractNumber(note, '時間');
+    if (ml > 0) mergeListSetting(familyId, 'milk_ml_suggestions', String(ml), 8);
+    if (min > 0) mergeListSetting(familyId, 'milk_min_suggestions', String(min), 8);
+  }
+  if (type === '睡眠') {
+    const min = extractNumber(note, '時間');
+    if (min > 0) mergeListSetting(familyId, 'sleep_min_suggestions', String(min), 8);
+  }
+}
+
+function mergeListSetting(familyId, key, value, maxItems) {
+  const current = getSettingsMap(familyId)[key] || '';
+  const list = current.split(',').map(s => s.trim()).filter(Boolean);
+  const filtered = list.filter(v => v !== value);
+  filtered.unshift(value);
+  saveSettingValue(familyId, key, filtered.slice(0, maxItems).join(','));
+}
+
+function extractNumber(note, label) {
+  const re = new RegExp(label + ':\\s*(\\d+)');
+  const m = String(note).match(re);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+function getLogSuggestions(params) {
+  const familyId = (params && params.familyId) || DEFAULT_FAMILY_ID;
+  const childId = (params && params.childId) || DEFAULT_CHILD_ID;
+  const settings = getSettingsMap(familyId);
+  const logs = getLogsFiltered({ familyId, childId });
+
+  const milkFromLogs = [];
+  const sleepFromLogs = [];
+  logs.slice(-30).reverse().forEach(l => {
+    if (l.type === '授乳') {
+      const ml = extractNumber(l.note, '量');
+      if (ml && milkFromLogs.indexOf(ml) === -1) milkFromLogs.push(ml);
+    }
+    if (l.type === '睡眠') {
+      const sm = extractNumber(l.note, '時間');
+      if (sm && sleepFromLogs.indexOf(sm) === -1) sleepFromLogs.push(sm);
+    }
+  });
+
+  const parseList = (s) => s.split(',').map(x => parseInt(x, 10)).filter(n => !isNaN(n) && n > 0);
+
+  return {
+    milkMl: uniqueNums([...milkFromLogs, ...parseList(settings.milk_ml_suggestions || '')]),
+    milkMin: uniqueNums(parseList(settings.milk_min_suggestions || '10,15,20')),
+    sleepMin: uniqueNums([...sleepFromLogs, ...parseList(settings.sleep_min_suggestions || '')]),
+    nextFeed: calcNextSchedule(logs, '授乳', settings),
+    nextSleep: calcNextSchedule(logs, '睡眠', settings),
+    settings: {
+      feed_interval_hours: parseFloat(settings.feed_interval_hours) || 3,
+      sleep_interval_hours: parseFloat(settings.sleep_interval_hours) || 2,
+      suggest_mode: settings.suggest_mode || 'average'
+    }
+  };
+}
+
+function uniqueNums(arr) {
+  const seen = {};
+  return arr.filter(n => {
+    if (seen[n]) return false;
+    seen[n] = true;
+    return true;
+  }).slice(0, 10);
+}
+
+function calcNextSchedule(logs, type, settings) {
+  const filtered = logs.filter(l => l.type === type && l.timestamp);
+  if (filtered.length === 0) {
+    const hours = type === '授乳'
+      ? (parseFloat(settings.feed_interval_hours) || 3)
+      : (parseFloat(settings.sleep_interval_hours) || 2);
+    const next = new Date(Date.now() + hours * 3600000);
+    return {
+      suggestedAt: Utilities.formatDate(next, "Asia/Tokyo", "yyyy/MM/dd HH:mm"),
+      label: '記録がないため、設定間隔から予測',
+      intervalHours: hours
+    };
+  }
+
+  const mode = settings.suggest_mode || 'average';
+  const times = [];
+  for (let i = 1; i < filtered.length; i++) {
+    const prev = parseJstTimestamp(filtered[i - 1].timestamp);
+    const curr = parseJstTimestamp(filtered[i].timestamp);
+    if (prev && curr) times.push((curr - prev) / 3600000);
+  }
+
+  let intervalHours = type === '授乳'
+    ? (parseFloat(settings.feed_interval_hours) || 3)
+    : (parseFloat(settings.sleep_interval_hours) || 2);
+
+  if (times.length > 0) {
+    if (mode === 'last') {
+      intervalHours = times[times.length - 1];
+    } else if (mode === 'average') {
+      intervalHours = times.reduce((a, b) => a + b, 0) / times.length;
+    } else if (mode === 'fixed') {
+      // keep settings interval
+    }
+  }
+
+  const last = parseJstTimestamp(filtered[filtered.length - 1].timestamp);
+  const next = new Date(last.getTime() + intervalHours * 3600000);
+  return {
+    suggestedAt: Utilities.formatDate(next, "Asia/Tokyo", "yyyy/MM/dd HH:mm"),
+    label: mode === 'fixed' ? '設定間隔' : (mode === 'last' ? '前回間隔' : '平均間隔'),
+    intervalHours: Math.round(intervalHours * 10) / 10
+  };
+}
+
+function parseJstTimestamp(ts) {
+  if (!ts) return null;
+  const m = String(ts).match(/(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  return new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]), parseInt(m[4]), parseInt(m[5]), parseInt(m[6]));
+}
+
+// ─── 設定・家族・子ども ─────────────────────────────────────────
+function getSettingsMap(familyId) {
+  const rows = getData('settings').filter(r => r.family_id === familyId);
+  const map = {};
+  rows.forEach(r => { map[r.key] = r.value; });
+  return map;
+}
+
+function saveSettings_(params) {
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  const settings = params.settings || {};
+  Object.keys(settings).forEach(key => saveSettingValue(familyId, key, String(settings[key])));
+  return { status: 'success', settings: getSettingsMap(familyId) };
+}
+
+function saveSettingValue(familyId, key, value) {
+  const sheet = SS.getSheetByName('settings');
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === familyId && rows[i][1] === key) {
+      sheet.getRange(i + 1, 3).setValue(value);
+      return;
+    }
+  }
+  sheet.appendRow([familyId, key, value]);
+}
+
+function addFamily_(params) {
+  const id = 'fam_' + Utilities.getUuid().substring(0, 8);
+  SS.getSheetByName('families').appendRow([id, params.name || '新しい家族']);
+  [['feed_interval_hours', '3'], ['sleep_interval_hours', '2'], ['suggest_mode', 'average']].forEach(([k, v]) => {
+    saveSettingValue(id, k, v);
+  });
+  return { status: 'success', id, name: params.name };
+}
+
+function addChild_(params) {
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  const id = 'child_' + Utilities.getUuid().substring(0, 8);
+  SS.getSheetByName('children').appendRow([id, familyId, params.name || 'お子さま', params.birthDate || '']);
+  return { status: 'success', id, name: params.name };
+}
+
+function getChildrenFiltered(params) {
+  const children = getData('children');
+  if (params && params.familyId) {
+    return children.filter(c => c.family_id === params.familyId);
+  }
+  return children;
+}
+
+// ─── 施設検索（OpenStreetMap Overpass API）──────────────────────
+function searchNearbyFacilities_(params) {
+  const lat = parseFloat(params.lat);
+  const lng = parseFloat(params.lng);
+  const radius = parseInt(params.radius, 10) || 2500;
+  const typeFilter = params.type || 'all';
+
+  if (isNaN(lat) || isNaN(lng)) {
+    return { facilities: [], error: 'lat_lng_required' };
+  }
+
+  const facilities = fetchOverpassFacilities(lat, lng, radius, typeFilter);
+  return { facilities: facilities };
+}
+
+function fetchOverpassFacilities(lat, lng, radius, typeFilter) {
+  const originLat = lat;
+  const originLng = lng;
+  const typeMap = {
+    park: ['leisure=park', 'leisure=playground', 'leisure=garden'],
+    hospital: ['amenity=clinic', 'amenity=doctors', 'amenity=hospital', 'healthcare:speciality=paediatrics'],
+    community: ['amenity=community_centre', 'amenity=social_facility', 'building=public'],
+    daycare: ['amenity=kindergarten', 'amenity=childcare', 'amenity=nursery'],
+    baby_room: ['changing_table=yes', 'amenity=toilets']
+  };
+
+  const typesToSearch = typeFilter === 'all'
+    ? Object.keys(typeMap)
+    : (typeMap[typeFilter] ? [typeFilter] : []);
+
+  const results = [];
+  const seen = {};
+
+  typesToSearch.forEach(facType => {
+    const tags = typeMap[facType] || [];
+    tags.forEach(tag => {
+      const parts = tag.split('=');
+      const key = parts[0];
+      const val = parts[1];
+      const query = buildOverpassQuery(lat, lng, radius, key, val);
+      try {
+        const elements = runOverpassQuery(query);
+        elements.forEach(el => {
+          const parsed = parseOverpassElement(el, facType);
+          if (!parsed) return;
+          const dedupeKey = parsed.name + '_' + parsed.lat.toFixed(5) + '_' + parsed.lng.toFixed(5);
+          if (seen[dedupeKey]) return;
+          seen[dedupeKey] = true;
+          results.push(parsed);
+        });
+      } catch (e) {
+        Logger.log('Overpass error: ' + e.message);
+      }
+    });
+  });
+
+  results.forEach(f => {
+    f.distance = haversineKm(originLat, originLng, f.lat, f.lng);
+  });
+  results.sort((a, b) => a.distance - b.distance);
+  return results.slice(0, 40);
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function buildOverpassQuery(lat, lng, radius, key, val) {
+  const filter = val ? `["${key}"="${val}"]` : `["${key}"]`;
+  return `[out:json][timeout:20];
+(
+  node${filter}(around:${radius},${lat},${lng});
+  way${filter}(around:${radius},${lat},${lng});
+);
+out center 30;`;
+}
+
+function runOverpassQuery(query) {
+  const endpoints = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter'
+  ];
+  for (let i = 0; i < endpoints.length; i++) {
+    try {
+      const res = UrlFetchApp.fetch(endpoints[i], {
+        method: 'post',
+        contentType: 'application/x-www-form-urlencoded',
+        payload: { data: query },
+        muteHttpExceptions: true
+      });
+      if (res.getResponseCode() === 200) {
+        const json = JSON.parse(res.getContentText());
+        return json.elements || [];
+      }
+    } catch (e) {
+      Logger.log(e.message);
+    }
+  }
+  return [];
+}
+
+function parseOverpassElement(el, facType) {
+  const tags = el.tags || {};
+  const name = tags.name || tags['name:ja'] || tags.operator;
+  if (!name) return null;
+
+  let lat = el.lat;
+  let lng = el.lon;
+  if ((lat === undefined || lng === undefined) && el.center) {
+    lat = el.center.lat;
+    lng = el.center.lon;
+  }
+  if (lat === undefined || lng === undefined) return null;
+
+  const address = [
+    tags['addr:full'],
+    tags['addr:province'] || tags['addr:state'],
+    tags['addr:city'],
+    tags['addr:suburb'],
+    tags['addr:street'],
+    tags['addr:housenumber']
+  ].filter(Boolean).join(' ') || tags['addr:full'] || '住所情報なし';
+
+  const phone = tags.phone || tags['contact:phone'] || tags['contact:mobile'] || '';
+
+  return {
+    id: 'osm_' + el.type + '_' + el.id,
+    name: name,
+    type: facType,
+    phone: phone,
+    address: address,
+    lat: lat,
+    lng: lng,
+    source: 'openstreetmap'
+  };
+}
+
+// ─── マイルストーン ─────────────────────────────────────────────
+function getMilestonesFiltered(params) {
+  const familyId = (params && params.familyId) || DEFAULT_FAMILY_ID;
+  const all = getData('milestones');
+  return all.filter(m => {
+    if (m.hidden === true || m.hidden === 'TRUE') return false;
+    const fam = m.family_id || '';
+    return fam === '' || fam === familyId;
+  });
+}
+
+function toggleMilestone_(params) {
+  const sheet = SS.getSheetByName('milestones');
+  const rows = sheet.getDataRange().getValues();
+  const id = String(params.id);
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === id) {
+      sheet.getRange(i + 1, 3).setValue(!rows[i][2]);
+      return { status: 'success', updated: true };
+    }
+  }
+  return { status: 'success', updated: false };
+}
+
+function hideMilestone_(params) {
+  const sheet = SS.getSheetByName('milestones');
+  const rows = sheet.getDataRange().getValues();
+  const id = String(params.id);
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === id) {
+      sheet.getRange(i + 1, 5).setValue(true);
+      return { status: 'success' };
+    }
+  }
+  return { status: 'error', message: 'not_found' };
+}
+
+function addMilestone_(params) {
+  const sheet = SS.getSheetByName('milestones');
+  const rows = sheet.getDataRange().getValues();
+  let maxId = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const n = parseInt(rows[i][0], 10);
+    if (!isNaN(n) && n > maxId) maxId = n;
+  }
+  const newId = String(maxId + 1);
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  sheet.appendRow([
+    newId,
+    params.title || '新しいマイルストーン',
+    false,
+    params.category || '1y',
+    false,
+    true,
+    familyId
+  ]);
+  return { status: 'success', id: newId };
+}
+
+function customizeMilestonesAI_(params) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) {
+    return { status: 'error', message: 'GEMINI_API_KEY が未設定です' };
+  }
+
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  const child = getChildContext(params.childId, familyId);
+  const visible = getMilestonesFiltered({ familyId }).slice(0, 40).map(m => m.title).join('、');
+
+  const prompt = `あなたは小児発達の専門家です。以下の家族・子ども情報と既存マイルストーンを踏まえ、
+追加すべきマイルストーンを5〜10個、JSON配列のみで返してください。
+形式: [{"title":"...","category":"0-3m"}]
+categoryは次から選ぶ: 0-1m, 0-3m, 3-6m, 6-9m, 9-12m, 1y, 1.5y, 2y, 2.5y, 3y, 4-5y, 6y
+
+【子ども】${child}
+【相談・要望】${params.prompt || '発達に合わせた項目を追加'}
+【既存（一部）】${visible}`;
+
+  const payload = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }]
+  };
+  const raw = fetchGemini(payload, apiKey);
+  let added = [];
+  try {
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (match) {
+      const items = JSON.parse(match[0]);
+      items.forEach(item => {
+        if (item.title) {
+          addMilestone_({ title: item.title, category: item.category || '1y', familyId });
+          added.push(item.title);
+        }
+      });
+    }
+  } catch (e) {
+    return { status: 'error', message: 'AI応答の解析に失敗しました', raw: raw };
+  }
+  return { status: 'success', added: added, reply: raw };
+}
+
+// ─── AI（パーソナライズ文脈付き）────────────────────────────────
+function buildPersonalContext(familyId, childId) {
+  const logs = getLogsFiltered({ familyId, childId }).slice(-50);
+  const child = getChildContext(childId, familyId);
+  const family = getData('families').find(f => f.id === familyId);
+  const milestones = getMilestonesFiltered({ familyId });
+  const done = milestones.filter(m => m.completed).map(m => m.title);
+  const pending = milestones.filter(m => !m.completed).slice(0, 15).map(m => m.title);
+  const settings = getSettingsMap(familyId);
+  const suggestions = getLogSuggestions({ familyId, childId });
+
+  const logText = logs.length
+    ? logs.map(l => `- [${l.timestamp}] ${l.type}: ${l.note}`).join('\n')
+    : '（記録なし）';
+
+  return `【家族】${family ? family.name : familyId}
+【お子さま】${child}
+【育児設定】授乳間隔目安 ${settings.feed_interval_hours || 3}時間 / 睡眠間隔 ${settings.sleep_interval_hours || 2}時間 / サジェスト ${settings.suggest_mode || 'average'}
+【次回授乳予測】${suggestions.nextFeed ? suggestions.nextFeed.suggestedAt : '不明'}
+【次回睡眠予測】${suggestions.nextSleep ? suggestions.nextSleep.suggestedAt : '不明'}
+【達成マイルストーン】${done.length ? done.join('、') : 'なし'}
+【未達成マイルストーン（一部）】${pending.length ? pending.join('、') : 'なし'}
+【直近の育児ログ（最大50件）】
+${logText}`;
+}
+
+function getChildContext(childId, familyId) {
+  const children = getChildrenFiltered({ familyId });
+  const c = children.find(ch => ch.id === childId) || children[0];
+  if (!c) return 'お子さま（プロフィール未登録）';
+  let age = '';
+  if (c.birth_date) {
+    try {
+      const birth = new Date(c.birth_date);
+      const months = Math.floor((Date.now() - birth.getTime()) / (30.44 * 24 * 3600000));
+      age = `（約${months}ヶ月）`;
+    } catch (e) { /* ignore */ }
+  }
+  return `${c.name || 'お子さま'}${age}`;
+}
+
+function askGemini(question, familyId, childId) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) {
+    return "【お知らせ】Gemini APIキー（GEMINI_API_KEY）がGASスクリプトプロパティに設定されていません。";
+  }
+
+  const fid = familyId || DEFAULT_FAMILY_ID;
+  const cid = childId || DEFAULT_CHILD_ID;
+  const context = buildPersonalContext(fid, cid);
+
+  const systemPrompt = `あなたは親身で温かいベテランの助産師・育児カウンセラーです。
+以下の【この家族の記録データ】を必ず参照し、パーソナライズされた具体的アドバイスを日本語で返答してください。
+複数のお子さまがいる場合は、文脈のお子さまに焦点を当ててください。
+回答は300文字以内。
+
+${context}`;
+
+  const payload = {
+    contents: [{
+      role: 'user',
+      parts: [{ text: systemPrompt + "\n\n相談内容: " + question }]
+    }]
+  };
+  return fetchGemini(payload, apiKey);
+}
+
+function summarizeLogs(familyId, childId) {
+  const fid = familyId || DEFAULT_FAMILY_ID;
+  const cid = childId || DEFAULT_CHILD_ID;
+  const logs = getLogsFiltered({ familyId: fid, childId: cid });
+  if (logs.length === 0) {
+    return "現在記録されている育児ライフログがありません。まずは日々の出来事を記録してみましょう！";
+  }
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) {
+    return "【お知らせ】Gemini APIキーが未設定のため、AI要約を生成できません。";
+  }
+
+  const context = buildPersonalContext(fid, cid);
+  const systemPrompt = `あなたは親身な育児アドバイザーです。【この家族の記録データ】を分析し、
+最近の状態の要約、親御さんへのねぎらい、ワンポイントアドバイスを250文字以内でまとめてください。
+
+${context}`;
+
+  const payload = {
+    contents: [{ role: 'user', parts: [{ text: systemPrompt }] }]
+  };
+  return fetchGemini(payload, apiKey);
+}
+
+function fetchGemini(payload, apiKey) {
+  const options = {
+    method: 'post',
+    headers: { 'Content-Type': 'application/json' },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  for (let i = 0; i < GEMINI_MODELS.length; i++) {
+    const model = GEMINI_MODELS[i];
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    try {
+      const response = UrlFetchApp.fetch(url, options);
+      const code = response.getResponseCode();
+      const text = response.getContentText();
+      if (code === 200) {
+        const json = JSON.parse(text);
+        const reply = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (reply) return reply.trim();
+      } else if (code === 429) {
+        continue;
+      }
+      Logger.log(`APIエラー (${model}): ${code}`);
+    } catch (e) {
+      Logger.log(`リクエストエラー (${model}): ${e.message}`);
+    }
+  }
+  return "申し訳ありません。AI機能でエラーが発生しました。時間をおいて再度お試しください。";
+}
+
+function getData(sheetName) {
+  const sheet = SS.getSheetByName(sheetName);
+  if (!sheet) return [];
+  const rows = sheet.getDataRange().getValues();
+  if (rows.length <= 1) return [];
+  const keys = rows[0];
+  return rows.slice(1).map(r => {
+    const obj = {};
+    keys.forEach((k, i) => {
+      let val = r[i];
+      if (val === 'TRUE' || val === true) val = true;
+      if (val === 'FALSE' || val === false) val = false;
+      obj[k] = val;
+    });
+    return obj;
+  });
+}
+
+function json(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
