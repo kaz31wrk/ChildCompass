@@ -638,8 +638,9 @@
             const [milestones, setMilestones] = React.useState([]);
             const [families, setFamilies] = React.useState([]);
             const [children, setChildren] = React.useState([]);
-            const [familyId, setFamilyId] = React.useState('fam_default');
-            const [childId, setChildId] = React.useState('child_1');
+            const [familyId, setFamilyId] = React.useState(localStorage.getItem('active_family_id') || 'fam_default');
+            const [childId, setChildId] = React.useState(localStorage.getItem('active_child_id') || 'child_1');
+            const [growthTimestamp, setGrowthTimestamp] = React.useState(toDatetimeLocalValue());
             const [suggestions, setSuggestions] = React.useState(null);
             const [showSettings, setShowSettings] = React.useState(false);
             const [settingsForm, setSettingsForm] = React.useState({ feed_interval_hours: 3, sleep_interval_hours: 2, suggest_mode: 'average' });
@@ -799,12 +800,39 @@
 
             const ctx = () => ({ familyId, childId });
 
-            React.useEffect(() => { loadAllData(); }, [familyId, childId]);
+            React.useEffect(() => {
+                if (userEmail) {
+                    loadAllData();
+                }
+            }, [userEmail]);
+
+            React.useEffect(() => {
+                if (userEmail && familyId && familyId !== 'fam_default') {
+                    localStorage.setItem('active_family_id', familyId);
+                    localStorage.setItem('active_child_id', childId || '');
+                    loadActiveData();
+                }
+            }, [familyId, childId]);
+
             React.useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
 
             React.useEffect(() => {
                 setDisplayFacilities(facilities);
             }, [facilities]);
+
+            // タイムアウト保証付き fetch ヘルパー (AbortSignal.timeout 非対応ブラウザ用)
+            const fetchWithTimeout = async (url, options = {}, timeoutMs = 10000) => {
+                const controller = new AbortController();
+                const id = setTimeout(() => controller.abort(), timeoutMs);
+                try {
+                    const response = await fetch(url, { ...options, signal: controller.signal });
+                    clearTimeout(id);
+                    return response;
+                } catch (error) {
+                    clearTimeout(id);
+                    throw error;
+                }
+            };
 
             // ブラウザから直接 Overpass API を叩く（GASの6秒タイムアウト回避）
             // カテゴリ別にクエリを分割して公園が飲食店に埋もれることを防ぐ
@@ -867,17 +895,17 @@ out center 20;`;
                 // 複数エンドポイントへ同時にリクエストを送り、一番早い成功応答を採用する (Race 方式)
                 const runQuery = async (query) => {
                     const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 12000); // 12秒タイムアウト
+                    const timeoutId = setTimeout(() => controller.abort(), 12000); // 12秒全体タイムアウト保護
 
                     const promises = endpoints.map(endpoint => {
                         return new Promise(async (resolve, reject) => {
                             try {
-                                const resp = await fetch(endpoint, {
+                                const resp = await fetchWithTimeout(endpoint, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                                     body: 'data=' + encodeURIComponent(query),
                                     signal: controller.signal
-                                });
+                                }, 12000);
                                 if (resp.ok) {
                                     const json = await resp.json();
                                     resolve(json.elements || []);
@@ -900,12 +928,11 @@ out center 20;`;
                         // Promise.any が失敗または非サポートブラウザの場合の逐次フォールバック
                         for (const endpoint of endpoints) {
                             try {
-                                const resp = await fetch(endpoint, {
+                                const resp = await fetchWithTimeout(endpoint, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                                    body: 'data=' + encodeURIComponent(query),
-                                    signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined
-                                });
+                                    body: 'data=' + encodeURIComponent(query)
+                                }, 10000);
                                 if (resp.ok) {
                                     const json = await resp.json();
                                     return json.elements || [];
@@ -1016,6 +1043,29 @@ out center 20;`;
                 } catch (e) { console.error(e); }
             };
 
+            const loadActiveData = async () => {
+                if (!familyId || familyId === 'fam_default') return;
+                const c = { familyId, childId };
+                try {
+                    const [l, m, g] = await Promise.all([
+                        runGas('getLogs', c),
+                        runGas('getMilestones', c),
+                        runGas('getGrowth', c)
+                    ]);
+                    setLogs(l || []);
+                    setMilestones(m || []);
+                    setGrowthData(g || []);
+
+                    // サジェスト
+                    const s = await runGas('getSuggestions', c);
+                    setSuggestions(s);
+                    if (s.milkMl && s.milkMl.length) setMilkMl(s.milkMl[0]);
+                    if (s.sleepMin && s.sleepMin.length) setSleepMin(s.sleepMin[0]);
+                } catch (e) {
+                    console.error("Failed to load active data", e);
+                }
+            };
+
             const loadAllData = async (targetFamilyId = null, targetEmail = null) => {
                 const activeEmail = targetEmail || userEmail || localStorage.getItem('user_email');
                 const isLocalMock = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !GAS_URL;
@@ -1045,6 +1095,8 @@ out center 20;`;
                                 activeChildId = auth.childId;
                                 setFamilyId(auth.familyId);
                                 setChildId(auth.childId);
+                                localStorage.setItem('active_family_id', auth.familyId);
+                                localStorage.setItem('active_child_id', auth.childId || '');
                             }
                         } catch (e) {
                             console.warn("Auth check failed, using mock/fallback for dev environment:", e.message);
@@ -1075,9 +1127,15 @@ out center 20;`;
                     setGrowthData(g || []);
                     if (ch && ch.length) {
                         const still = ch.find(x => x.id === activeChildId);
-                        if (!still) setChildId(ch[0].id);
+                        if (!still) {
+                            setChildId(ch[0].id);
+                            localStorage.setItem('active_child_id', ch[0].id);
+                        } else {
+                            localStorage.setItem('active_child_id', activeChildId);
+                        }
                     } else {
                         setChildId('');
+                        localStorage.setItem('active_child_id', '');
                     }
                     if (sett) setSettingsForm({
                         feed_interval_hours: parseFloat(sett.feed_interval_hours) || 3,
@@ -1270,12 +1328,13 @@ out center 20;`;
                         height: growthHeight,
                         weight: growthWeight,
                         headCircumference: growthHead,
-                        timestamp: datetimeLocalToJst(logTimestamp),
+                        timestamp: datetimeLocalToJst(growthTimestamp),
                         ...ctx()
                     });
                     setGrowthHeight('');
                     setGrowthWeight('');
                     setGrowthHead('');
+                    setGrowthTimestamp(toDatetimeLocalValue());
                     const g = await runGas('getGrowth', ctx());
                     setGrowthData(g || []);
                 } catch { alert('成長記録の登録に失敗しました。'); }
@@ -1448,6 +1507,16 @@ out center 20;`;
                 }
             }, [facFilter]);
 
+            React.useEffect(() => {
+                if (activeTab === 'facilities') {
+                    if (!userLocation) {
+                        handleRequestGPS();
+                    } else {
+                        loadNearbyFacilities(userLocation.lat, userLocation.lng);
+                    }
+                }
+            }, [activeTab]);
+
             const toggleCat = (key) => setOpenCats(prev => ({ ...prev, [key]: !prev[key] }));
 
             const getTypeColor = (type) => ({
@@ -1598,17 +1667,35 @@ out center 20;`;
                             </div>
                         </div>
                         <div className="grid grid-cols-2 gap-2">
-                            <select value={familyId} onChange={e => { setFamilyId(e.target.value); setChildId(''); }}
+                            <select value={familyId} onChange={e => {
+                                const newFamId = e.target.value;
+                                setFamilyId(newFamId);
+                                localStorage.setItem('active_family_id', newFamId);
+                                setChildId('');
+                                localStorage.setItem('active_child_id', '');
+                            }}
                                 className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-semibold">
-                                {(families.length ? families : [{ id: 'fam_default', name: 'わが家' }]).map(f => (
-                                    <option key={f.id} value={f.id}>{f.name}</option>
-                                ))}
+                                {families.length === 0 ? (
+                                    <option value={familyId}>読み込み中...</option>
+                                ) : (
+                                    families.map(f => (
+                                        <option key={f.id} value={f.id}>{f.name}</option>
+                                    ))
+                                )}
                             </select>
-                            <select value={childId} onChange={e => setChildId(e.target.value)}
+                            <select value={childId} onChange={e => {
+                                const newChildId = e.target.value;
+                                setChildId(newChildId);
+                                localStorage.setItem('active_child_id', newChildId);
+                            }}
                                 className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-semibold">
-                                {(children.length ? children : [{ id: 'child_1', name: 'お子さま' }]).map(c => (
-                                    <option key={c.id} value={c.id}>{c.name}</option>
-                                ))}
+                                {children.length === 0 ? (
+                                    <option value={childId}>読み込み中...</option>
+                                ) : (
+                                    children.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))
+                                )}
                             </select>
                         </div>
                     </header>
@@ -1853,7 +1940,7 @@ out center 20;`;
                                             <div>
                                                 <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">記録する日時（いつの出来事か）</label>
                                                 <input type="datetime-local" value={logTimestamp} onChange={e => setLogTimestamp(e.target.value)}
-                                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                                                    className="w-full max-w-full box-border bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                 <button type="button" onClick={() => setLogTimestamp(toDatetimeLocalValue())}
                                                     className="mt-1 text-[10px] text-indigo-600 font-semibold">今の時刻に戻す</button>
                                             </div>
@@ -2291,6 +2378,13 @@ out center 20;`;
                                     <div className="bg-white/80 border border-slate-100 rounded-2xl p-4 shadow-sm">
                                         <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">測定値を登録する</h2>
                                         <form onSubmit={handleAddGrowth} className="space-y-3">
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">測定日時</label>
+                                                <input type="datetime-local" value={growthTimestamp} onChange={e => setGrowthTimestamp(e.target.value)}
+                                                    className="w-full max-w-full box-border bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                                                <button type="button" onClick={() => setGrowthTimestamp(toDatetimeLocalValue())}
+                                                    className="mt-1 text-[10px] text-indigo-600 font-semibold">今の時刻に戻す</button>
+                                            </div>
                                             <div className="grid grid-cols-3 gap-2">
                                                 <div>
                                                     <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">身長 (cm)</label>
