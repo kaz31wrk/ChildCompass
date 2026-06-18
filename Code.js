@@ -46,6 +46,16 @@ function doPost(e) {
 }
 
 function handleAction(actionName, params) {
+  // セキュリティ：params.email から所属家族IDを解決し、params.familyId を強制上書き
+  const email = params && params.email;
+  if (email) {
+    const users = getData('users');
+    const user = users.find(u => String(u.email).toLowerCase() === email.toLowerCase());
+    if (user) {
+      params.familyId = user.family_id;
+    }
+  }
+
   switch (actionName) {
     case 'addLog': return addLog_(params);
     case 'toggleMilestone': return toggleMilestone_(params);
@@ -61,7 +71,7 @@ function handleAction(actionName, params) {
     case 'getLogs': return getLogsFiltered(params);
     case 'getMilestones': return getMilestonesFiltered(params);
     case 'getChildren': return getChildrenFiltered(params);
-    case 'getFamilies': return getData('families');
+    case 'getFamilies': return getFamiliesFiltered_(params);
     case 'getSettings': return getSettingsMap(params.familyId || DEFAULT_FAMILY_ID);
     case 'getSuggestions': return getLogSuggestions(params);
     case 'addGrowth': return addGrowth_(params);
@@ -402,11 +412,10 @@ function addChild_(params) {
 }
 
 function getChildrenFiltered(params) {
+  const email = params && params.email;
+  const myFamilyId = getUserFamilyId_(email);
   const children = getData('children');
-  if (params && params.familyId) {
-    return children.filter(c => c.family_id === params.familyId);
-  }
-  return children;
+  return children.filter(c => c.family_id === myFamilyId);
 }
 
 // ─── 施設検索（OpenStreetMap Overpass API）──────────────────────
@@ -1267,10 +1276,16 @@ function updateChild_(params) {
   const birthDate = params.birthDate;
   if (!childId || !name) return { error: 'invalid_params' };
   
+  const email = params && params.email;
+  const myFamilyId = getUserFamilyId_(email);
+  
   const sheet = SS.getSheetByName('children');
   const rows = sheet.getDataRange().getValues();
   for (let i = 1; i < rows.length; i++) {
     if (rows[i][0] === childId) {
+      if (rows[i][1] !== myFamilyId) {
+        return { error: 'unauthorized', message: 'この子どもの情報を編集する権限がありません。' };
+      }
       sheet.getRange(i + 1, 3).setValue(name);
       sheet.getRange(i + 1, 4).setValue(birthDate || '');
       return { status: 'success' };
@@ -1283,13 +1298,33 @@ function deleteChild_(params) {
   const childId = params.childId;
   if (!childId) return { error: 'invalid_params' };
   
+  const email = params && params.email;
+  const myFamilyId = getUserFamilyId_(email);
+  
   const sheet = SS.getSheetByName('children');
   const rows = sheet.getDataRange().getValues();
   for (let i = rows.length - 1; i >= 1; i--) {
     if (rows[i][0] === childId) {
+      if (rows[i][1] !== myFamilyId) {
+        return { error: 'unauthorized', message: 'この子どもを削除する権限がありません。' };
+      }
       sheet.deleteRow(i + 1);
       return { status: 'success' };
     }
   }
   return { error: 'not_found' };
+}
+
+function getUserFamilyId_(email) {
+  if (!email) return DEFAULT_FAMILY_ID;
+  const users = getData('users');
+  const user = users.find(u => String(u.email).toLowerCase() === email.toLowerCase());
+  return user ? user.family_id : DEFAULT_FAMILY_ID;
+}
+
+function getFamiliesFiltered_(params) {
+  const email = params && params.email;
+  const myFamilyId = getUserFamilyId_(email);
+  const allFamilies = getData('families');
+  return allFamilies.filter(f => f.id === myFamilyId);
 }
