@@ -10,27 +10,39 @@ const DEFAULT_FAMILY_ID = 'fam_default';
 const DEFAULT_CHILD_ID = 'child_1';
 
 function doGet(e) {
-  try { initSpreadsheet(); } catch (err) { Logger.log("初期化エラー: " + err.message); }
+  try {
+    initSpreadsheet();
+    const action = e.parameter.action;
+    if (action === 'getLogs') return json(getLogsFiltered(e.parameter));
+    if (action === 'getFacilities') return json(searchNearbyFacilities_(e.parameter));
+    if (action === 'getMilestones') return json(getMilestonesFiltered(e.parameter));
+    if (action === 'getFamilies') return json(getData('families'));
+    if (action === 'getChildren') return json(getChildrenFiltered(e.parameter));
+    if (action === 'getSettings') return json(getSettingsMap(e.parameter.familyId || DEFAULT_FAMILY_ID));
+    if (action === 'getSuggestions') return json(getLogSuggestions(e.parameter));
+    if (action === 'getGrowth') return json(getGrowthFiltered(e.parameter));
+    if (action === 'getNearbyPlaces') return json(getNearbyPlaces_(e.parameter));
+    if (action === 'getErrors') return json(getData('errors'));
 
-  const action = e.parameter.action;
-  if (action === 'getLogs') return json(getLogsFiltered(e.parameter));
-  if (action === 'getFacilities') return json(searchNearbyFacilities_(e.parameter));
-  if (action === 'getMilestones') return json(getMilestonesFiltered(e.parameter));
-  if (action === 'getFamilies') return json(getData('families'));
-  if (action === 'getChildren') return json(getChildrenFiltered(e.parameter));
-  if (action === 'getSettings') return json(getSettingsMap(e.parameter.familyId || DEFAULT_FAMILY_ID));
-  if (action === 'getSuggestions') return json(getLogSuggestions(e.parameter));
-
-  return HtmlService.createTemplateFromFile('Index')
-    .evaluate()
-    .setTitle('ChildCompass')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+    return HtmlService.createTemplateFromFile('index')
+      .evaluate()
+      .setTitle('ChildCompass')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  } catch (err) {
+    logError_(err, "doGet: " + (e ? JSON.stringify(e.parameter) : ''));
+    return HtmlService.createHtmlOutput("システムエラーが発生しました。スプレッドシートの 'errors' シートをご確認ください。<br>" + err.message);
+  }
 }
 
 function doPost(e) {
-  try { initSpreadsheet(); } catch (err) { Logger.log("初期化エラー: " + err.message); }
-  const data = JSON.parse(e.postData.contents);
-  return json(handleAction(data.action, data));
+  try {
+    initSpreadsheet();
+    const data = JSON.parse(e.postData.contents);
+    return json(handleAction(data.action, data));
+  } catch (err) {
+    logError_(err, "doPost: " + (e ? e.postData.contents : ''));
+    return json({ error: err.message || 'unknown_post_error' });
+  }
 }
 
 function handleAction(actionName, params) {
@@ -52,22 +64,41 @@ function handleAction(actionName, params) {
     case 'getFamilies': return getData('families');
     case 'getSettings': return getSettingsMap(params.familyId || DEFAULT_FAMILY_ID);
     case 'getSuggestions': return getLogSuggestions(params);
+    case 'addGrowth': return addGrowth_(params);
+    case 'getGrowth': return getGrowthFiltered(params);
+    case 'getNearbyPlaces': return getNearbyPlaces_(params);
+    case 'geocodeAddress': return geocodeAddress_(params);
+    case 'evaluateSymptomAI': return evaluateSymptomAI_(params);
+    case 'getGeminiPromptAndKey': return getGeminiPromptAndKey_(params);
+    case 'getSymptomPromptAndKey': return getSymptomPromptAndKey_(params);
+    case 'getLogsSummaryPromptAndKey': return getLogsSummaryPromptAndKey_(params);
     default: return { error: 'invalid_action' };
   }
 }
 
 function executeActionFromRun(actionName, paramsJson) {
-  try { initSpreadsheet(); } catch (err) { Logger.log("初期化エラー: " + err.message); }
-  const params = paramsJson ? JSON.parse(paramsJson) : {};
-  const result = handleAction(actionName, params);
-  if (result && result.error) throw new Error(result.error);
-  return result;
+  try {
+    initSpreadsheet();
+    const params = paramsJson ? JSON.parse(paramsJson) : {};
+    const result = handleAction(actionName, params);
+    if (result && result.error) {
+      logError_(new Error(result.error), "executeActionFromRun (action error): " + actionName);
+      throw new Error(result.error);
+    }
+    return result;
+  } catch (err) {
+    logError_(err, "executeActionFromRun: " + actionName);
+    throw err;
+  }
 }
 
 // ─── スプレッドシート初期化 ─────────────────────────────────────
 function initSpreadsheet() {
   const activeSS = SpreadsheetApp.getActiveSpreadsheet();
   if (!activeSS) throw new Error("Active Spreadsheet is not accessible.");
+
+  ensureSheet('errors', ['timestamp', 'context', 'message', 'stack']);
+  ensureSheet('growth', ['timestamp', 'family_id', 'child_id', 'height', 'weight', 'head_circumference']);
 
   ensureSheet('logs', ['timestamp', 'type', 'note', 'family_id', 'child_id'], () => {
     const ts = formatNowJst();
@@ -102,7 +133,7 @@ function upgradeLogsSheet(sheet) {
     const rows = sheet.getLastRow();
     if (rows > 1) {
       const count = rows - 1;
-      sheet.getRange(2, 4, rows, 2).setValues(
+      sheet.getRange(2, 4, count, 2).setValues(
         Array(count).fill(null).map(() => [DEFAULT_FAMILY_ID, DEFAULT_CHILD_ID])
       );
     }
@@ -224,7 +255,7 @@ function getLogSuggestions(params) {
     }
     if (l.type === '睡眠') {
       const sm = extractNumber(l.note, '時間');
-      if (sm && sleepFrom_logs.indexOf(sm) === -1) sleepFrom_logs.push(sm); // Fixed typo in variable name if any
+      if (sm && sleepFromLogs.indexOf(sm) === -1) sleepFromLogs.push(sm);
     }
   });
 
@@ -300,6 +331,12 @@ function calcNextSchedule(logs, type, settings) {
 
 function parseJstTimestamp(ts) {
   if (!ts) return null;
+  if (ts instanceof Date) return ts;
+  
+  // Attempt standard parsing if it matches common date formats
+  const d = new Date(ts);
+  if (!isNaN(d.getTime())) return d;
+
   const m = String(ts).match(/(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
   if (!m) return null;
   return new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]), parseInt(m[4]), parseInt(m[5]), parseInt(m[6]));
@@ -609,6 +646,13 @@ function buildPersonalContext(familyId, childId) {
   const pending = milestones.filter(m => !m.completed).slice(0, 15).map(m => m.title);
   const settings = getSettingsMap(familyId);
   const suggestions = getLogSuggestions({ familyId, childId });
+  const growth = getGrowthFiltered({ familyId, childId });
+
+  let growthText = '（未登録）';
+  if (growth.length > 0) {
+    const latest = growth[growth.length - 1];
+    growthText = `身長: ${latest.height || '—'}cm, 体重: ${latest.weight || '—'}kg, 頭囲: ${latest.head_circumference || '—'}cm (測定: ${latest.timestamp})`;
+  }
 
   const logText = logs.length
     ? logs.map(l => `- [${l.timestamp}] ${l.type}: ${l.note}`).join('\n')
@@ -616,6 +660,7 @@ function buildPersonalContext(familyId, childId) {
 
   return `【家族】${family ? family.name : familyId}
 【お子さま】${child}
+【最新の成長記録】${growthText}
 【育児設定】授乳間隔目安 ${settings.feed_interval_hours || 3}時間 / 睡眠間隔 ${settings.sleep_interval_hours || 2}時間 / サジェスト ${settings.suggest_mode || 'average'}
 【次回授乳予測】${suggestions.nextFeed ? suggestions.nextFeed.suggestedAt : '不明'}
 【次回睡眠予測】${suggestions.nextSleep ? suggestions.nextSleep.suggestedAt : '不明'}
@@ -732,7 +777,10 @@ function getData(sheetName) {
     keys.forEach((k, i) => {
       let val = r[i];
       if (val === 'TRUE' || val === true) val = true;
-      if (val === 'FALSE' || val = false) val = false;
+      if (val === 'FALSE' || val === false) val = false;
+      if (val instanceof Date) {
+        val = Utilities.formatDate(val, "Asia/Tokyo", "yyyy/MM/dd HH:mm:ss");
+      }
       obj[k] = val;
     });
     return obj;
@@ -742,4 +790,290 @@ function getData(sheetName) {
 function json(data) {
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ─── エラーログ記録 ─────────────────────────────────────────────
+function logError_(err, context = '') {
+  try {
+    const activeSS = SpreadsheetApp.getActiveSpreadsheet();
+    if (!activeSS) return;
+    let sheet = activeSS.getSheetByName('errors');
+    if (!sheet) {
+      sheet = activeSS.insertSheet('errors');
+      sheet.appendRow(['timestamp', 'context', 'message', 'stack']);
+    }
+    const ts = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy/MM/dd HH:mm:ss");
+    sheet.appendRow([ts, context, err.message || String(err), err.stack || '']);
+  } catch (e) {
+    Logger.log("エラーロギング自体のエラー: " + e.message);
+  }
+}
+
+// ─── 成長記録 API ─────────────────────────────────────────────
+function addGrowth_(params) {
+  const sheet = SS.getSheetByName('growth');
+  const timestamp = params.timestamp ? normalizeTimestamp(params.timestamp) : formatNowJst();
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  const childId = params.childId || DEFAULT_CHILD_ID;
+  const height = parseFloat(params.height) || '';
+  const weight = parseFloat(params.weight) || '';
+  const head = parseFloat(params.headCircumference) || '';
+  
+  sheet.appendRow([timestamp, familyId, childId, height, weight, head]);
+  return { status: 'success' };
+}
+
+function getGrowthFiltered(params) {
+  const all = getData('growth');
+  const familyId = params && params.familyId;
+  const childId = params && params.childId;
+  return all.filter(g => {
+    if (familyId && g.family_id && g.family_id !== familyId) return false;
+    if (childId && g.child_id && g.child_id !== childId) return false;
+    return true;
+  });
+}
+
+// ─── お出かけ周辺施設 (Places API & OSM Fallback) ────────────────
+function getNearbyPlaces_(params) {
+  const lat = parseFloat(params.lat);
+  const lng = parseFloat(params.lng);
+  if (isNaN(lat) || isNaN(lng)) return { places: [], error: 'lat_lng_required' };
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty("MAPS_API_KEY") || 
+                 PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+
+  if (apiKey) {
+    try {
+      const url = "https://places.googleapis.com/v1/places:searchNearby";
+      const payload = {
+        includedTypes: ["restaurant", "cafe", "department_store", "shopping_mall"],
+        maxResultCount: 15,
+        locationRestriction: {
+          circle: {
+            center: { latitude: lat, longitude: lng },
+            radius: 1500.0
+          }
+        }
+      };
+      const options = {
+        method: "post",
+        contentType: "application/json",
+        headers: {
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location,places.nationalPhoneNumber,places.types"
+        },
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      };
+      const response = UrlFetchApp.fetch(url, options);
+      if (response.getResponseCode() === 200) {
+        const json = JSON.parse(response.getContentText());
+        const places = (json.places || []).map(p => ({
+          name: p.displayName?.text || 'スポット',
+          address: p.formattedAddress || '住所情報なし',
+          phone: p.nationalPhoneNumber || '',
+          lat: p.location?.latitude,
+          lng: p.location?.longitude,
+          type: p.types?.includes("restaurant") || p.types?.includes("cafe") ? "restaurant" : "shop",
+          source: 'google_places'
+        }));
+        if (places.length > 0) return { places };
+      }
+    } catch (e) {
+      Logger.log("Google Places API error: " + e.message);
+    }
+  }
+
+  // フォールバック: OSM Overpass API を使用して周辺のレストラン・カフェ・ショップを取得
+  try {
+    const radius = 1500;
+    const query = `[out:json][timeout:20];
+    (
+      node["amenity"~"restaurant|cafe"](around:${radius},${lat},${lng});
+      way["amenity"~"restaurant|cafe"](around:${radius},${lat},${lng});
+      node["shop"~"toys|baby_goods|clothes|mall"](around:${radius},${lat},${lng});
+      way["shop"~"toys|baby_goods|clothes|mall"](around:${radius},${lat},${lng});
+    );
+    out center 20;`;
+    
+    const elements = runOverpassQuery(query);
+    const places = elements.map(el => {
+      const tags = el.tags || {};
+      const name = tags.name || tags['name:ja'] || tags.operator || '子連れ向けスポット';
+      let elLat = el.lat;
+      let elLng = el.lon;
+      if ((elLat === undefined || elLng === undefined) && el.center) {
+        elLat = el.center.lat;
+        elLng = el.center.lon;
+      }
+      if (elLat === undefined || elLng === undefined) return null;
+      
+      const address = [
+        tags['addr:full'],
+        tags['addr:province'] || tags['addr:state'],
+        tags['addr:city'],
+        tags['addr:street'],
+        tags['addr:housenumber']
+      ].filter(Boolean).join(' ') || tags['addr:full'] || '住所情報なし';
+
+      const type = tags.amenity ? 'restaurant' : 'shop';
+      const phone = tags.phone || tags['contact:phone'] || '';
+
+      return {
+        name,
+        address,
+        phone,
+        lat: elLat,
+        lng: elLng,
+        type,
+        source: 'openstreetmap_fallback'
+      };
+    }).filter(Boolean);
+
+    return { places };
+  } catch (e) {
+    Logger.log("OSM Places Fallback error: " + e.message);
+    return { places: [], error: e.message };
+  }
+}
+
+// ─── AIによる症状・緊急度 triaging ──────────────────────────────
+function evaluateSymptomAI_(params) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) return { error: 'gemini_api_key_not_configured' };
+
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  const childId = params.childId || DEFAULT_CHILD_ID;
+  const logs = getLogsFiltered({ familyId, childId }).slice(-10);
+  const child = getChildContext(childId, familyId);
+
+  const logText = logs.map(l => `- [${l.timestamp}] ${l.type}: ${l.note}`).join('\n');
+
+  const systemPrompt = `あなたは小児科救急のベテラン医師・ナースです。
+以下の「子どもの基本情報」「最近のライフログ」、およびユーザーが入力した「現在の体調・症状」をもとに、
+緊急度を4段階（【緊急】今すぐ119番、【夜間救急】救急受診推奨、【翌日受診】翌日受診推奨、【自宅安静】自宅で様子見）で判定し、
+親御さんへのアドバイスと観察すべきポイント、推奨アクション（#8000への電話、または小児科受診）をJSON形式のみで返答してください。
+
+【注意】
+必ず以下のJSONフォーマットのみを返してください。マークダウンの\`\`\`json等の囲みは不要です。
+返却フォーマット:
+{
+  "urgency": "【緊急】今すぐ119番" / "【夜間救急】救急受診推奨" / "【翌日受診】翌日受診推奨" / "【自宅安静】自宅で様子見",
+  "urgencyLevel": "danger" / "warning" / "info" / "success",
+  "reason": "緊急度判定の簡単な理由",
+  "advice": "親御さんへの具体的アドバイスや看病の仕方",
+  "points": ["観察ポイント1", "観察ポイント2", "観察ポイント3"],
+  "action": "推奨する具体的な次の行動"
+}
+
+【子どもの基本情報】${child}
+【最近のログ】
+${logText}
+
+【現在の体調・症状】
+${params.symptom || '体調不良'}`;
+
+  const payload = {
+    contents: [{ role: 'user', parts: [{ text: systemPrompt }] }]
+  };
+  const raw = fetchGemini(payload, apiKey);
+  try {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (match) {
+      return JSON.parse(match[0]);
+    }
+    return { urgency: "【翌日受診】翌日受診推奨", urgencyLevel: "info", reason: "解析エラー", advice: raw, points: ["水分摂取の状態"], action: "小児科を受診してください" };
+  } catch (e) {
+    return { error: 'parse_error', raw: raw };
+  }
+}
+
+function getGeminiPromptAndKey_(params) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) return { error: 'gemini_api_key_not_configured' };
+
+  const fid = params.familyId || DEFAULT_FAMILY_ID;
+  const cid = params.childId || DEFAULT_CHILD_ID;
+  const context = buildPersonalContext(fid, cid);
+
+  const systemPrompt = `あなたは親身で温かいベテランの助産師・育児カウンセラーです。
+提供された【この子供に関する最新のデータ】を前提知識として頭に入れ、親御さんからの質問に親身に、具体的かつ実用的なアドバイスを日本語で回答してください。
+複数のお子さまがいる場合は、対象のお子さまに焦点を当ててください。
+回答は300文字以内。
+
+【重要ルール・免責】
+1. あなたは医療診断や治療行為を行うことはできません。病気やケガの疑い、または緊急性の高い状態であると判断した場合は、速やかに小児科医を受診するか、アプリの「緊急」タブから #8000 (子ども医療電話相談) や 119番 に連絡するよう強く促してください。
+2. 回答には必要に応じて専門医への相談を勧める案内を含めてください。
+
+【この子供に関する最新のデータ】
+${context}`;
+
+  return {
+    prompt: systemPrompt,
+    apiKey: apiKey
+  };
+}
+
+function getLogsSummaryPromptAndKey_(params) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) return { error: 'gemini_api_key_not_configured' };
+
+  const fid = params.familyId || DEFAULT_FAMILY_ID;
+  const cid = params.childId || DEFAULT_CHILD_ID;
+  
+  const logs = getLogsFiltered({ familyId: fid, childId: cid });
+  if (logs.length === 0) {
+    return { empty: true, message: "現在記録されている育児ライフログがありません。まずは日々の出来事を記録してみましょう！" };
+  }
+
+  const context = buildPersonalContext(fid, cid);
+  const systemPrompt = `あなたは親身な育児アドバイザーです。【この家族の記録データ】を分析し、
+最近の状態の要約、親御さんへのねぎらい、ワンポイントアドバイスを250文字以内でまとめてください。
+
+${context}`;
+
+  return {
+    prompt: systemPrompt,
+    apiKey: apiKey
+  };
+}
+
+function getSymptomPromptAndKey_(params) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) return { error: 'gemini_api_key_not_configured' };
+
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  const childId = params.childId || DEFAULT_CHILD_ID;
+  
+  // 過去のログや成長データを含む詳細な子供コンテキストを構築
+  const context = buildPersonalContext(familyId, childId);
+
+  const systemPrompt = `あなたは小児科救急のベテラン医師・ナースです。
+提供された【この子供に関する最新のデータ】、およびユーザーが入力した「現在の体調・症状」をもとに、
+緊急度を4段階（【緊急】今すぐ119番、【夜間救急】救急受診推奨、【翌日受診】翌日受診推奨、【自宅安静】自宅で様子見）で客観的・慎重に判定し、
+親御さんへのアドバイスと観察すべきポイント、推奨アクション（#8000への電話、または小児科受診）をJSON形式のみで返答してください。
+
+【注意】
+必ず以下のJSONフォーマットのみを返してください。マークダウンの\`\`\`json等の囲みは不要です。
+返却フォーマット:
+{
+  "urgency": "【緊急】今すぐ119番" / "【夜間救急】救急受診推奨" / "【翌日受診】翌日受診推奨" / "【自宅安静】自宅で様子見",
+  "urgencyLevel": "danger" / "warning" / "info" / "success",
+  "reason": "緊急度判定の簡潔な理由",
+  "advice": "親御さんへの具体的アドバイスや看病の仕方",
+  "points": ["観察ポイント1", "観察ポイント2", "観察ポイント3"],
+  "action": "推奨する具体的な次の行動"
+}
+
+【この子供に関する最新のデータ】
+${context}
+
+【現在の体調・症状】
+${params.symptom || '体調不良'}`;
+
+  return {
+    prompt: systemPrompt,
+    apiKey: apiKey
+  };
 }

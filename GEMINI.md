@@ -1,0 +1,208 @@
+# ChildCompass - 開発コンテキストと修正履歴
+
+GAS (Google Apps Script) と React を組み合わせた育児支援アプリケーション `ChildCompass` の開発メモです。
+
+## プロジェクト概要
+
+- **フロントエンド**: `Index.html` に React (v18)、Babel Standalone、Tailwind CSS、Leaflet.js を埋め込んだシングルファイル構成。
+- **バックエンド**: `Code.js` (Google Apps Script)。スプレッドシートをデータベースとして使用し、Gemini API と連携して育児ログの要約やアドバイスを行う。
+- **デプロイツール**: Clasp (`clasp push` 等)
+
+## 注意事項・ルール
+
+- クライアント側のスクリプトは `Index.html` 内の `<script type="text/babel">` 内に実装され、ブラウザ上の Babel Standalone でトランスパイルされます。
+- ファイルが不完全な状態（途中で切れるなど）になると、Babel Standalone のトランスパイルエラーにより、ブラウザ上で `Failed to execute 'appendChild' on 'Node': Cannot use import statement outside a module` などの致命的なエラーが発生し、画面全体が真っ白になります。
+- 編集時には必ずファイルの完全性を損なわないように注意してください。
+- **デプロイルール（必須）**:
+  コードを変更した後は、例外なく毎回 `clasp push` を実行し、その後以下のデプロイIDを指定してWebアプリケーションの上書きデプロイ（再デプロイ）を行ってください。
+  - デプロイID: `AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw`
+  - 実行コマンド: `clasp deploy -i AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw -d "Description (変更内容)"`
+  - WebアプリURL: `https://script.google.com/macros/s/AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw/exec`
+
+## 修正履歴
+
+### 2026-06-17
+
+- **現象**: 
+  1. GASのWebアプリ表示時にブラウザコンソールで以下のエラーが発生し、UIが表示されない。
+     `Uncaught SyntaxError: Failed to execute 'appendChild' on 'Node': Cannot use import statement outside a module` (`transformScriptTags.ts:114` 起点)
+  2. 上記のエラーが解決された後、`ReferenceError: sleepFrom_logs is not defined` が発生し、一部データ処理（getLogSuggestions）が失敗する。
+  3. 2が解決された後、授乳登録時に `TypeError: Cannot read properties of null (reading 'getTime') at calcNextSchedule` が発生する。
+  4. 授乳登録や睡眠登録を行った際、「今日の授乳量」および「今日の睡眠時間」が `0` のまま更新されない。
+- **原因**:
+  - 前回の修正コミット (`2907fe7f424b8138865fe6521e75b336f1a8665f`) において、`Index.html` の後半部分（全体の約8割）が切り落とされる破損が発生していた。また、`actionA` という未定義変数のタイポも混入していた。
+  - HTMLでロードされていたBabel Standaloneが最新版（`latest`）だったため、React 17+ の新しいJSXトランスフォーム（`automatic` runtime）が走ってしまい、トランスパイル後のコードに `import` 文が出力され、ブラウザが `Cannot use import statement outside a module` エラーを投げていた。
+  - `Code.js` の735行目で発生していた比較演算子のタイポ（`val = false`）を `val === false` に修正。
+  - `Code.js` の `getLogSuggestions` 関数（227行目）において、定義した配列変数名 `sleepFromLogs` を、後続処理で誤って `sleepFrom_logs`（アンダースコア混じり）とタイポしていた。
+  - スプレッドシートの `logs` シートから読み込んだ `timestamp` の値が Date オブジェクト型であったため、`parseJstTimestamp` 内の文字列正規表現マッチングで `null` を返してしまい、`last.getTime()` の呼び出しでヌルポインタエラーとなっていた。
+  - スプレッドシートから読み込んだ日付型の `timestamp` が自動的に ISO 8601 形式の UTC 文字列でシリアライズされていたため、`Index.html` 内の `calcTodayTotals` でスペース分割したローカル日付文字列との比較が常に不一致（`false`）になっていた。
+  - `Code.js` の `upgradeLogsSheet` で列アップデートする際の行数指定範囲が全行数 `rows` に指定されていたため、余剰な空行までデフォルト値で埋めてしまっていた。
+- **対応**:
+  1. 初期コミット (`994c4ae37b69ba3432cc9960e70a968cd5f35ecd`) から破損前の完全な `Index.html` を復元。
+  2. 前回のコミットで意図されていた正しい変更点（マイルストーン文言 `お座りができた` -> `お座りができる` の変更、および `calcTodayTotals` 関数内での今日の日付判定ロジックの改善）のみを適用。
+  3. タイポ `actionA` は `actionName` のままで維持。
+  4. `Code.js` の735行目で発生していた比較演算子のタイポ（`val = false`）を `val === false` に修正。
+  5. `@babel/standalone` のバージョンを `7.22.20` に固定し、`<script type="text/babel">` の先頭に `/* @jsxRuntime classic */` を追記して `import` 文の生成を防止。
+  6. `Code.js` の227行目で発生していた `sleepFrom_logs` のタイポを `sleepFromLogs` に修正。
+  7. `Code.js` の `parseJstTimestamp` において、値が `Date` インスタンスであった場合のバイパス処理と標準パースのフォールバックを追加。
+  8. GAS上の予期せぬ例外をスプレッドシートに記録するエラーロギング機構（スプレッドシート内 `errors` シートの自動作成と `logError_` ヘルパー）を実装し、`doGet`, `doPost`, `executeActionFromRun` を `try-catch` でラップ。
+  9. `Code.js` の `getData` において、値が `Date` オブジェクトの場合は JST 文字列 `yyyy/MM/dd HH:mm:ss` にフォーマットして返すように統一。
+  10. `Index.html` の `calcTodayTotals` において、日付の一致判定を Date オブジェクトの年・月・日の個別数値比較に書き換え、集計処理を堅牢化。
+  11. `Code.js` の `upgradeLogsSheet` の範囲行数指定バグを `count` (データ行数) に修正。
+  12. `clasp push` および指定のデプロイID (`AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw`) への上書きデプロイを実行。
+
+### 2026-06-17 (追加機能の実装とバグ修正)
+
+- **目的と実装要件**:
+  1. 育児ライフログの拡張（食事・排泄・体調の登録）。
+  2. 成長曲線（身長・体重・頭囲）のSVGグラフによる直接描画。
+  3. Google Places API & OpenStreetMap連携による周辺お出かけ情報の充実（駐車場や対象年齢などの属性情報、模擬イベントの表示）。
+  4. 教育ロードマップ（月齢別知育、性教育、しつけ習慣、ワクチン健診スケジュール）のタイムライン表示。
+  5. AI症状トリアージ（4段階緊急度、看病アドバイス、観察ポイント、推奨行動）と近隣緊急病院の優先表示。
+  6. AI相談機能への成長データ・月齢コンテキストの統合、および全画面での医療免責事項の明示。
+- **原因・障害対応**:
+  - `Index.html` の32行目付近にあった `GAS_URL` 宣言ブロックの `<script>` 閉じタグが欠落していたため、後続のスタイルシートやHTML全体がJS構文として誤認識され、Babel standaloneがトランスパイルエラー（SyntaxError）を吐いて白画面になるバグを解消。
+- **対応**:
+  1. `Code.js` に `growth` シートの自動初期化と、`addGrowth`, `getGrowth` APIを実装。AI brainコンテキスト作成時に最新の成長データも要約して渡すよう拡張。
+  2. `Code.js` に Places API を用いた `getNearbyPlaces` APIを実装（OSM Overpass APIへのフォールバック付き）。
+  3. `Code.js` に Gemini API を用いた症状トリアージ用の `evaluateSymptomAI` APIを実装。
+  4. `Index.html` の32行目の script 閉じタグ欠落を修正。
+  5. `Index.html` に「食事 (完食度/メニュー)」「排泄 (種類/状態)」「体調 (体温/7つの随伴症状チェック)」の登録フォームを実装。タイムラインのバッジ色の最適化。
+  6. `Index.html` に「成長 (GROWTH)」タブを追加。身長・体重・頭囲の登録、および自動スケールとホバーツールチップ付きのSVG折れ線グラフ描画コンポーネントを自前実装。
+  7. `Index.html` に「お出かけ (FACILITIES)」タブを拡張。駐車場情報、料金、推奨年齢などの属性テーブルと、直近の親子模擬イベントをカードに表示。
+  8. `Index.html` に「ロードマップ (ROADMAP)」タブを追加。子供の生年月日から動的月齢を算出し、発達段階に応じた知育・習慣・プライベートゾーン性教育・ワクチンのタイムラインステップを表示。
+  9. `Index.html` に「緊急 (EMERGENCY)」タブを追加。免責事項、119番と#8000のクイック発信、AI症状トリアージの入力フォームと4段階色分け結果カードの表示、近隣小児科・緊急外来の優先リストを表示。
+  10. `Index.html` に「AI相談 (AI CONSULT)」での医療免責事項を明記。
+  11. `clasp push` を行い、指定のデプロイID (`AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw`) への上書きデプロイ (バージョン `@18`) を完了。動作検証により全機能の正常稼働を確認。
+
+### 2026-06-17 (Gemini API 呼び出し方式のハイブリッド化とUI微調整)
+
+- **現象**: 
+  - AI相談や緊急症状トリアージを実行した際に、「申し訳ありません、回答を取得できませんでした。」というエラーが返る。
+  - スプレッドシートの `errors` シートを解析したところ、`User location is not supported for the API key.` が発生していた。
+- **原因**:
+  - Google Apps Script (GAS) サーバーが物理的に配置されているリージョン（欧州等）が、Gemini APIの無料枠制限地域外になっていたため、APIアクセス制限によりリクエストが拒否されていた。
+- **対応**:
+  - **ハイブリッド呼び出し方式の導入**: 
+    1. GAS側 (`Code.js`) では、スプレッドシートからコンテキストデータを集めてプロンプトテキストを構築する処理、およびスクリプトプロパティの `GEMINI_API_KEY` をフロントエンドに引き渡すための新規API (`getGeminiPromptAndKey_`, `getSymptomPromptAndKey_`, `getLogsSummaryPromptAndKey_`) を実装。
+    2. フロントエンド (`Index.html`) に `callGeminiDirectly` ヘルパーを実装し、ユーザーのブラウザ（日本のローカルネットワーク）から直接 Gemini API サーバーを `fetch` で叩く方式に切り替え。これにより、GASのリージョン制限エラーを完全に回避。
+  - **ナビゲーションUIの改善**:
+    - 下部ナビゲーションバーのボタン要素について、縦パディングを `py-1` から `py-2` に拡張。さらにアクティブ状態のタブに薄い背景 (`bg-indigo-50/50`) を付与し、タップターゲットの拡大および視覚的フィードバックを強化。
+  - **デプロイ**:
+    - `clasp push` および上書きデプロイを実行し、バージョン `@21` として公開。
+    - 動作検証の結果、AI相談と緊急症状トリアージがリージョンエラーを起こさず、正常にAI回答を取得できることを確認。
+
+### 2026-06-17 (お出かけタブの大幅改善)
+
+- **現象**:
+  1. GPS位置情報の取得で `kCLErrorLocationUnknown` が発生し、現在地の取得に失敗。代替手段がなくお出かけタブが使えない状態。
+  2. お出かけタブで取得できる施設カテゴリが飲食店・ショップのみで、公園・児童館・授乳室などの子連れ向けカテゴリが欠落していた。
+  3. 施設カードの詳細情報（対象年齢・料金・駐車場・特徴）が全施設共通のハードコードされた固定モックデータになっていた。
+- **原因**:
+  - GAS の Webアプリは `<iframe>` として表示されているため、iOS Safari のCore Locationがリクエストを拒否 (`kCLErrorLocationUnknown`)。
+  - `getNearbyPlaces_` の OSM Overpass クエリが `restaurant|cafe` と `toys|baby_goods` のみで不十分だった。
+  - 施設詳細情報の実装が `(idx % 3 === 0)` などのモックロジックのままだった。
+- **対応**:
+  1. **バックエンド (`Code.js`)**:
+     - `getNearbyPlaces_` のOSMクエリを全7カテゴリ対応に拡充: 公園 (`leisure=playground|park`)、児童館 (`amenity=community_centre|childcare|kindergarten`)、飲食店 (`amenity=restaurant|cafe|fast_food`)、ショップ (`shop=toys|baby_goods...`)、授乳室 (`amenity=toilets` + `changing_table=yes`、`amenity=baby_hatch`)、病院 (`amenity=hospital|clinic|doctors`)。
+     - OSMタグ (`changing_table`, `highchair`, `baby_room`, `playground`, `kids_area`, `stroller`) から `childFriendlyTags` 配列を動的に生成してレスポンスに含めるよう追加。
+     - `geocodeAddress_` 関数を新規実装: OSM Nominatim APIを使って住所テキスト → 緯度経度に変換。
+     - `handleAction` に `geocodeAddress` ケースを追加。
+  2. **フロントエンド (`Index.html`)**:
+     - `FAC_TYPES` に `restaurant`（飲食店）と `shop`（ショップ）を追加し7カテゴリに拡張。各タイプに `score` フィールドを追加。
+     - `calcChildScore` ヘルパーを実装: タイプ別スコア（公園=10, 児童館=9, 授乳室=8…）+ 属性タグボーナスで子連れ優先順位を計算。
+     - `gpsError`, `addressInput`, `addressLoading` ステートを追加。
+     - `handleRequestGPS` を改修: GPS失敗時に `alert()` で終わるのではなく `gpsError` を `true` にして住所検索フォームをインライン表示。タイムアウト10秒・高精度オフで設定。
+     - `handleAddressSearch` を新規実装: GASの `geocodeAddress` APIを呼び出して住所 → 緯度経度に変換し施設検索に使用。
+     - お出かけタブのUIを全面刷新:
+       - GPS失敗時の **住所検索フォーム**（アンバーカラーのインラインエラーパネル）を追加。
+       - 施設取得後に **「子連れにおすすめ TOP3」** カード（金・銀・銅メダル表示）を表示。
+       - 施設カードの詳細情報をタイプ別の動的情報（対象年齢・料金・子連れワンポイントアドバイス）に置き換え。
+       - OSMタグ由来の子連れ属性バッジ（`✓ おむつ替えあり` など）を施設カードとTOPカードに表示。
+       - 固定モックデータ（details / mockEvent）を削除。
+  3. `clasp push` および指定デプロイIDへの上書きデプロイをバージョン `@23` として実行。
+
+### 2026-06-18 (お出かけ施設が0件になるバグの根本解決)
+
+- **現象**: 住所検索・GPS取得で現在地を設定しても施設が一件も表示されない。
+- **原因**:
+  - GAS の無料プランの実行時間上限は **6秒**。しかし Overpass API のクエリは5〜25秒かかるため、GASが実行タイムアウトして空配列を返していた。
+  - ローカルの Python でOverpass APIに直接クエリを送ると正常に10件以上返ることを確認済み。
+  - GAS経由で `?action=getNearbyPlaces` を呼んだ場合は0件（エラーなし）を返すことを `curl` で確認済み。
+- **対応**:
+  - `Index.html` の `loadNearbyFacilities` を改修。GASを経由するのをやめ、ブラウザから直接 Overpass API (`overpass-api.de` / `overpass.kumi.systems` にフォールバック) を `fetch` で叩く方式に変更。
+  - Overpass クエリのタイムアウトを30秒に設定し、`AbortSignal.timeout(35000)` でフロント側もタイムアウト管理。
+  - これにより施設が正常に取得・表示されるようになった。
+  - `clasp push` および指定デプロイIDへの上書きデプロイをバージョン `@24` として実行。
+
+### 2026-06-18 (公園0件バグの修正とクエリ分割)
+
+- **現象**: 公園のヒットが0件。飲食店・ショップは表示される。
+- **原因**:
+  - 全カテゴリを1つのクエリにまとめ `out center 40` で取得していたため、飲食店のnode（大量）が先に40件を埋めてしまい、公園（way形式が多い）が結果に含まれなかった。
+- **対応**:
+  - `fetchOverpassDirectly` をカテゴリ別3クエリに分割（公園系30件、子育て施設系20件、飲食店系20件）。
+  - `Promise.all` で並列実行してマージ・重複排除することで、すべてのカテゴリから均等にデータが取れるようになった。
+  - `clasp push` および指定デプロイIDへの上書きデプロイをバージョン `@25` として実行。
+
+### 2026-06-18 (お出かけタブの大幅改善)
+
+- **現象**:
+  1. GPS位置情報の取得で `kCLErrorLocationUnknown` が発生し、現在地の取得に失敗。代替手段がなくお出かけタブが使えない状態。
+  2. お出かけタブで取得できる施設カテゴリが飲食店・ショップのみで、公園・児童館・授乳室などの子連れ向けカテゴリが欠落していた。
+  3. 施設カードの詳細情報（対象年齢・料金・駐車場・特徴）が全施設共通のハードコードされた固定モックデータになっていた。
+- **対応**:
+  1. **地図をGoogle Maps Embedに切り替え（無料）**:
+     - `FacilityMap` コンポーネントを LeafletJS + OSM から Google Maps Embed（iframe埋め込み、APIキー不要）に全面変更。
+     - 現在地取得後は `maps.google.com/maps?q=lat,lng&output=embed` で最新のGoogleマップを表示。
+     - 「Mapsで開く」ボタンを地図右上に追加: 現在地周辺の公園・児童館・授乳室をGoogle Maps上で直接検索可能。
+  2. **施設カードに「子連れ情報をWeb検索」ボタンを追加**:
+     - 施設名 + カテゴリ別のキーワード（「ベビーカー 入れる」「おむつ替え」「授乳室」等）でGoogle検索するリンクを全カードに追加。
+     - TOP3カードにも同様のインライン検索リンクを追加。
+     - OSMのタグ情報（`changing_table`, `highchair` 等）だけでは把握しきれない子連れ情報を手軽にWeb検索できるようにした。
+  3. `clasp push` および指定デプロイIDへの上書きデプロイをバージョン `@26` として実行。
+
+### 2026-06-18 (緊急通報の誤操作防止確認ポップアップ追加)
+
+- **要望**:
+  - 緊急タブで通報・電話ボタン（119や#8000）をタップした際に、誤発信を防ぐため電話をかけるか確認するポップアップを表示したい。
+- **対応**:
+  1. **確認ポップアップ用Stateの導入**:
+     - `Index.html` のメインAppコンポーネントに `callConfirm` ステート (`{ number, label, emoji, description } | null`) を追加。
+  2. **電話発信リンクのボタン化**:
+     - 緊急タブの「119番通報」「#8000 に電話」、および「近隣の小児科・緊急外来リストの電話ボタン」を `<a>` (telリンク) から、確認ステートをセットする `<button>` に書き換え。
+     - 一貫性の向上と誤発信防止のため、お出かけタブの「お出かけ先施設リストの電話ボタン」も同様にボタン化し、確認を挟むように拡張。
+  3. **美しい確認モーダルの実装**:
+     - アプリ全体の配色に合わせた、半透明のガラスモーフィズム背景（`backdrop-blur-sm`）のダイアログを実装。
+     - モーダル内では、発信先の名前、実際の電話番号（太字のフォント）、および「何のための窓口か」の説明（例: 119番なら命に関わる第一選択、#8000なら小児科医等の相談窓口など）を表示。
+     - 119番通報時は発信ボタンが赤〜ローズ色のグラデーション、その他の番号はインディゴ〜バイオレット色のグラデーションになるようビジュアルを最適化。
+  4. `clasp push` および指定デプロイIDへの上書きデプロイをバージョン `@27` として実行。
+
+### 2026-06-18 (AIチャットの履歴対応（マルチターン）と子供の全情報（成長・ログ・設定）のコンテキスト前提化)
+
+- **要望**:
+  - アプリで取得した子供に関する情報（プロフィール、ライフログ、成長記録、設定など）をすべてのAI機能で大前提のコンテキストとして利用し、チャット回答に活かす。また、AIチャットで過去の対話履歴をふまえて会話できるように適切に整理する。
+- **対応**:
+  1. **バックエンドのAIコンテキスト整備**:
+     - `Code.js` の `getGeminiPromptAndKey_` (AI相談) を修正し、`question` の直接埋め込みを廃止し、システム指示書 (`systemInstruction`) として子供の最新コンテキスト (`buildPersonalContext`) を出力するように変更。
+     - `getSymptomPromptAndKey_` (緊急トリアージ) について、月齢と10件のログのみだった簡易な情報構成から、最新の成長記録（身長・体重）や詳細なライフログを含む `buildPersonalContext` を統合した精緻なコンテキスト構成にアップデート。
+     - AI相談用に「医療行為・診断を行えないため、病気や緊急時は119番や#8000、小児科医を頼るよう促す」という安全ガイドライン（医療免責事項）をシステムプロンプトに内包。
+  2. **フロントエンドのマルチターンチャット対応**:
+     - `Index.html` の `callGeminiDirectly` を修正し、`actionName === 'getGeminiPromptAndKey'` の際に `params.history` (対話履歴) から Gemini API 向けの `contents` 配列（userとmodelが交互に並ぶ形式）を生成し、システム指示 (`systemInstruction`) と共に送信する仕組みを実装（最初の案内メッセージは除外してユーザー開始に整頓）。
+     - `handleSendChat` において、新しいユーザー発言を含めた新しい履歴配列 `newHistory` を作成し、それを `callGeminiDirectly` の `history` パラメータとして引き渡すように変更。
+  3. `clasp push` および上書きデプロイをバージョン `@28` として実行。
+
+### 2026-06-18 (GitHub Pages連携（フロントエンド外部配信）への移行対応)
+
+- **要望**:
+  - フロントエンドを GitHub Pages（静的ホスティング）に配置し、バックエンドを GAS（APIサーバー）として運用できるように改良したい。
+- **対応**:
+  1. **フロントエンド (`index.html`) の通信改修**:
+     - `Index.html` を `index.html`（小文字のi）にリネームして GitHub Pages のデフォルトエントリポイントとして認識されるように対応。
+     - `runGas` ヘルパーを拡張し、ブラウザに `google.script.run` が存在しない（GitHub Pages等の外部ホスティング環境）場合、GASのWebアプリURL (`GAS_URL`) に向けて `fetch` (POST) でAPIリクエストを直接投げる通信ロジックを実装。
+     - CORSのプリフライトリクエスト (OPTIONS) による通信拒否を回避するため、`fetch` 送信時に不要な `Content-Type: application/json` ヘッダーを排除し、単純なPOSTリクエストとして送信するように通信パラメータを最適化（GAS側の `doPost` は `e.postData.contents` から生テキストをパースするためこれで正常に動作する）。
+     - `callGeminiDirectly` を修正し、外部本番環境（localhost以外の外部ドメイン）の場合はモックデータをスキップして GAS のAPIからプロンプトとAPIキーを取得し、ブラウザから本物の Gemini API を叩くように処理を統合。
+  2. **バックエンド (`Code.js`) のAPI対応**:
+     - `doGet` で `Index`（大文字）をロードしていた処理を小文字の `index` に変更。
+     - `handleAction` の switch 文に、クライアントから呼び出されていた住所変換API `geocodeAddress` ケースを追加し、`geocodeAddress_` 関数とマッピング。
+  3. `clasp push` および指定デプロイIDへの上書きデプロイをバージョン `@29` として実行。
