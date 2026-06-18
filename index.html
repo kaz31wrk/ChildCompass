@@ -717,44 +717,52 @@
                 if (userEmail || !googleClientId) return;
 
                 let timer = null;
+                let attempts = 0;
+                const MAX_ATTEMPTS = 20; // 500ms x 20 = 10秒
 
                 const initGis = () => {
-                    // window.google が GAS の google.script.run と衝突しないよう
-                    // google.accounts.id まで全て存在するかを厳密チェック
+                    attempts++;
+                    // window.googleを明示的に参照（BabelトランスパイルやGAS環境でのシャドウイング回避）
+                    const goog = window.google;
                     if (
-                        typeof window.google !== 'undefined' &&
-                        window.google.accounts &&
-                        window.google.accounts.id
+                        goog &&
+                        goog.accounts &&
+                        goog.accounts.id
                     ) {
                         if (timer) { clearInterval(timer); timer = null; }
                         try {
-                            google.accounts.id.initialize({
+                            goog.accounts.id.initialize({
                                 client_id: googleClientId,
                                 callback: handleCredentialResponse,
                                 auto_select: false
                             });
                             const btnEl = document.getElementById("google-signin-btn");
                             if (btnEl) {
-                                google.accounts.id.renderButton(btnEl, {
+                                goog.accounts.id.renderButton(btnEl, {
                                     theme: "outline", size: "large", width: 280, shape: "pill"
                                 });
                             }
+                            return true; // 成功
                         } catch (err) {
                             console.error("GIS initialization error:", err);
-                            setAuthError("Google ログインの初期化に失敗しました。クライアントIDが正しいかご確認ください。");
+                            // エラーが起きても成功フラグは返さない（タイマーは既にクリア済み）
                         }
+                    } else if (attempts >= MAX_ATTEMPTS) {
+                        // 10秒経っても初期化できなければ諦める
+                        if (timer) { clearInterval(timer); timer = null; }
+                        console.warn("GIS: google.accounts.id could not be loaded after 10s");
                     }
-                    // まだロードされていない場合はポーリングを継続
+                    return false;
                 };
 
-                // 即試行し、未ロードならポーリング
-                initGis();
-                if (!(typeof window.google !== 'undefined' && window.google.accounts && window.google.accounts.id)) {
+                // 即試行し、失敗したらポーリング
+                if (!initGis()) {
                     timer = setInterval(initGis, 500);
                 }
 
                 return () => { if (timer) clearInterval(timer); };
             }, [googleClientId, userEmail]);
+
 
             const [familyMembers, setFamilyMembers] = React.useState([]);
             const [newMemberEmail, setNewMemberEmail] = React.useState('');
