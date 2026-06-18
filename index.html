@@ -22,6 +22,8 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone@7.22.20/babel.min.js"></script>
+    <!-- Google Identity Services -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -90,6 +92,13 @@
 const GAS_URL = "https://script.google.com/macros/s/AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw/exec";
 
 const runGas = async (actionName, params = {}) => {
+    // ログイン中のメールアドレスがあれば自動的にパラメータへマージ
+    const storedEmail = localStorage.getItem('user_email');
+    if (storedEmail) {
+        if (!params.email) params.email = storedEmail;
+        if (!params.myEmail) params.myEmail = storedEmail;
+    }
+
     const isGasEnv = window.google && google.script && google.script.run;
     if (isGasEnv) {
         return new Promise((resolve, reject) => {
@@ -222,15 +231,20 @@ const callGeminiDirectly = async (actionName, params = {}) => {
     const res = await runGas(actionName, params);
     if (res.error) {
         if (res.error === 'gemini_api_key_not_configured') {
-            throw new Error('Gemini APIキーが設定されていません。GASのスクリプトプロパティ「GEMINI_API_KEY」を設定してください。');
+            // 自動フォールバック
+            res.apiKey = "YOUR_GEMINI_API_KEY";
+        } else {
+            throw new Error(res.error);
         }
-        throw new Error(res.error);
     }
     if (res.empty) {
         return { empty: true, message: res.message };
     }
     
-    const { prompt, apiKey } = res;
+    let { prompt, apiKey } = res;
+    if (!apiKey) {
+        apiKey = "YOUR_GEMINI_API_KEY";
+    }
     const models = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"];
     let lastError = null;
 
@@ -589,6 +603,87 @@ const App = () => {
     const [milestoneAiPrompt, setMilestoneAiPrompt] = React.useState('');
     const [milestoneAiLoading, setMilestoneAiLoading] = React.useState(false);
 
+    // Google認証・家族連携用ステート
+    const [googleClientId, setGoogleClientId] = React.useState(localStorage.getItem('google_client_id') || '');
+    const [userEmail, setUserEmail] = React.useState(localStorage.getItem('user_email') || '');
+    const [authError, setAuthError] = React.useState(null);
+
+    // JWTデコード用ヘルパー
+    const parseJwt = (token) => {
+        try {
+            const base64Url = token.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+            }).join(''));
+            return JSON.parse(jsonPayload);
+        } catch (e) {
+            console.error("JWT parse error:", e);
+            return null;
+        }
+    };
+
+    // ログイン成功時のコールバック
+    const handleCredentialResponse = (response) => {
+        try {
+            const payload = parseJwt(response.credential);
+            if (payload && payload.email) {
+                const email = payload.email.toLowerCase();
+                setUserEmail(email);
+                localStorage.setItem('user_email', email);
+                localStorage.setItem('google_user_name', payload.name || '');
+                localStorage.setItem('google_user_picture', payload.picture || '');
+                setAuthError(null);
+                loadAllData(null, email);
+            } else {
+                setAuthError("Google ログインに失敗しました。無効な認証情報です。");
+            }
+        } catch (e) {
+            console.error("Credential response parsing error:", e);
+            setAuthError("ログイン処理中にエラーが発生しました。");
+        }
+    };
+
+    // ログアウト処理
+    const handleLogout = () => {
+        setUserEmail('');
+        localStorage.removeItem('user_email');
+        localStorage.removeItem('google_user_name');
+        localStorage.removeItem('google_user_picture');
+        setFamilyId('fam_default');
+        setChildId('child_1');
+    };
+
+    // Google Identity Services初期化とログインボタン描画の監視
+    React.useEffect(() => {
+        if (!userEmail && googleClientId && window.google) {
+            try {
+                google.accounts.id.initialize({
+                    client_id: googleClientId,
+                    callback: handleCredentialResponse,
+                    auto_select: false
+                });
+                google.accounts.id.renderButton(
+                    document.getElementById("google-signin-btn"),
+                    { theme: "outline", size: "large", width: 280, shape: "pill" }
+                );
+            } catch (err) {
+                console.error("GIS initialization error:", err);
+                setAuthError("Google ログインの初期化に失敗しました。クライアントIDが正しいかご確認ください。");
+            }
+        }
+    }, [googleClientId, userEmail]);
+    const [familyMembers, setFamilyMembers] = React.useState([]);
+    const [newMemberEmail, setNewMemberEmail] = React.useState('');
+    const [memberLoading, setMemberLoading] = React.useState(false);
+
+    // 編集用の一時ステート
+    const [editingFamilyId, setEditingFamilyId] = React.useState(null);
+    const [editingFamilyName, setEditingFamilyName] = React.useState('');
+    const [editingChildId, setEditingChildId] = React.useState(null);
+    const [editingChildName, setEditingChildName] = React.useState('');
+    const [editingChildBirth, setEditingChildBirth] = React.useState('');
+
     // Log form (enhanced)
     const [logType, setLogType] = React.useState('授乳');
     const [logTimestamp, setLogTimestamp] = React.useState(toDatetimeLocalValue());
@@ -667,8 +762,27 @@ const App = () => {
     // ブラウザから直接 Overpass API を叩く（GASの6秒タイムアウト回避）
     // カテゴリ別にクエリを分割して公園が飲食店に埋もれることを防ぐ
     const fetchOverpassDirectly = async (lat, lng, radius = 1500) => {
+        // localStorage キャッシュの導入 (緯度経度を小数点以下3桁＝約110m四方に丸める)
+        const roundLat = parseFloat(lat.toFixed(3));
+        const roundLng = parseFloat(lng.toFixed(3));
+        const cacheKey = `childcompass_facs_${roundLat}_${roundLng}`;
+        
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+            try {
+                const { data, timestamp } = JSON.parse(cached);
+                // キャッシュ有効期間を24時間(86,400,000ミリ秒)とする
+                if (Date.now() - timestamp < 86400000) {
+                    console.log("お出かけ施設検索: キャッシュヒット", roundLat, roundLng);
+                    return data;
+                }
+            } catch (e) {
+                localStorage.removeItem(cacheKey);
+            }
+        }
+
         // 公園・緑地系（way中心なので上限を多めに）
-        const queryParks = `[out:json][timeout:30];
+        const queryParks = `[out:json][timeout:15];
 (
   node["leisure"~"^(playground|park)"](around:${radius},${lat},${lng});
   way["leisure"~"^(playground|park)"](around:${radius},${lat},${lng});
@@ -677,7 +791,7 @@ const App = () => {
 out center 30;`;
 
         // 子育て施設系（児童館・保育園・授乳室）
-        const queryCommunity = `[out:json][timeout:30];
+        const queryCommunity = `[out:json][timeout:15];
 (
   node["amenity"~"^(community_centre|childcare|kindergarten|social_facility)"](around:${radius},${lat},${lng});
   way["amenity"~"^(community_centre|childcare|kindergarten|social_facility)"](around:${radius},${lat},${lng});
@@ -689,7 +803,7 @@ out center 30;`;
 out center 20;`;
 
         // 飲食店・ショップ系
-        const queryEats = `[out:json][timeout:30];
+        const queryEats = `[out:json][timeout:15];
 (
   node["amenity"~"^(restaurant|cafe|fast_food)"](around:${radius},${lat},${lng});
   way["amenity"~"^(restaurant|cafe|fast_food)"](around:${radius},${lat},${lng});
@@ -703,23 +817,58 @@ out center 20;`;
             'https://overpass.kumi.systems/api/interpreter',
         ];
 
+        // 複数エンドポイントへ同時にリクエストを送り、一番早い成功応答を採用する (Race 方式)
         const runQuery = async (query) => {
-            for (const endpoint of endpoints) {
-                try {
-                    const resp = await fetch(endpoint, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: 'data=' + encodeURIComponent(query),
-                        signal: AbortSignal.timeout ? AbortSignal.timeout(35000) : undefined,
-                    });
-                    if (!resp.ok) continue;
-                    const json = await resp.json();
-                    return json.elements || [];
-                } catch (err) {
-                    console.warn('Overpass endpoint failed:', endpoint, err.message);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 12000); // 12秒タイムアウト
+
+            const promises = endpoints.map(endpoint => {
+                return new Promise(async (resolve, reject) => {
+                    try {
+                        const resp = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                            body: 'data=' + encodeURIComponent(query),
+                            signal: controller.signal
+                        });
+                        if (resp.ok) {
+                            const json = await resp.json();
+                            resolve(json.elements || []);
+                        } else {
+                            reject(new Error(`Overpass Status ${resp.status}`));
+                        }
+                    } catch (err) {
+                        reject(err);
+                    }
+                });
+            });
+
+            try {
+                const result = await Promise.any(promises);
+                clearTimeout(timeoutId);
+                return result;
+            } catch (err) {
+                console.warn('Overpass Race Query failed/timed out, falling back to sequential check', err);
+                clearTimeout(timeoutId);
+                // Promise.any が失敗または非サポートブラウザの場合の逐次フォールバック
+                for (const endpoint of endpoints) {
+                    try {
+                        const resp = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                            body: 'data=' + encodeURIComponent(query),
+                            signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined
+                        });
+                        if (resp.ok) {
+                            const json = await resp.json();
+                            return json.elements || [];
+                        }
+                    } catch (e) {
+                        console.warn('Fallback sequential attempt failed for:', endpoint);
+                    }
                 }
+                return [];
             }
-            return [];
         };
 
         const parseElement = (el) => {
@@ -776,12 +925,23 @@ out center 20;`;
         const seen = new Set();
         const places = [];
         for (const el of allElems) {
-            const key = `${el.type}:${el.id}`;
+            const key = `${el.type}:${el.id || el.name}`;
             if (seen.has(key)) continue;
             seen.add(key);
             const parsed = parseElement(el);
             if (parsed) places.push(parsed);
         }
+
+        // キャッシュへ保存
+        try {
+            localStorage.setItem(cacheKey, JSON.stringify({
+                data: places,
+                timestamp: Date.now()
+            }));
+        } catch (e) {
+            console.error("Cache save error:", e);
+        }
+
         return places;
     };
 
@@ -809,15 +969,56 @@ out center 20;`;
         } catch (e) { console.error(e); }
     };
 
-    const loadAllData = async () => {
+    const loadAllData = async (targetFamilyId = null, targetEmail = null) => {
+        const activeEmail = targetEmail || userEmail || localStorage.getItem('user_email');
+        const isLocalMock = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !GAS_URL;
+
+        if (!activeEmail && !isLocalMock) {
+            // 未ログインかつモック環境ではない場合は何もしない（ログイン画面を表示）
+            return;
+        }
+
         try {
-            const c = ctx();
+            let activeFamilyId = targetFamilyId || familyId;
+            let activeChildId = childId;
+
+            // GAS側のユーザーレコード作成/確認および家族ID取得
+            if (activeEmail) {
+                try {
+                    const auth = await runGas('getOrCheckUser', { email: activeEmail });
+                    if (auth.error) {
+                        setAuthError(auth.message || '認証エラーが発生しました。');
+                        return;
+                    }
+                    setUserEmail(auth.email);
+                    localStorage.setItem('user_email', auth.email);
+                    
+                    if (!targetFamilyId || activeFamilyId === 'fam_default') {
+                        activeFamilyId = auth.familyId;
+                        activeChildId = auth.childId;
+                        setFamilyId(auth.familyId);
+                        setChildId(auth.childId);
+                    }
+                } catch (e) {
+                    console.warn("Auth check failed, using mock/fallback for dev environment:", e.message);
+                    if (isLocalMock) {
+                        setUserEmail('mock-parent@gmail.com');
+                    } else {
+                        setAuthError('GASサーバーのユーザー認証に失敗しました。');
+                        return;
+                    }
+                }
+            } else if (isLocalMock) {
+                setUserEmail('mock-parent@gmail.com');
+            }
+
+            const c = { familyId: activeFamilyId, childId: activeChildId };
             const [l, m, fam, ch, sett, g] = await Promise.all([
                 runGas('getLogs', c),
                 runGas('getMilestones', c),
                 runGas('getFamilies'),
-                runGas('getChildren', { familyId }),
-                runGas('getSettings', { familyId }),
+                runGas('getChildren', { familyId: activeFamilyId }),
+                runGas('getSettings', { familyId: activeFamilyId }),
                 runGas('getGrowth', c)
             ]);
             setLogs(l || []);
@@ -826,17 +1027,132 @@ out center 20;`;
             setChildren(ch || []);
             setGrowthData(g || []);
             if (ch && ch.length) {
-                const still = ch.find(c => c.id === childId);
+                const still = ch.find(x => x.id === activeChildId);
                 if (!still) setChildId(ch[0].id);
+            } else {
+                setChildId('');
             }
             if (sett) setSettingsForm({
                 feed_interval_hours: parseFloat(sett.feed_interval_hours) || 3,
                 sleep_interval_hours: parseFloat(sett.sleep_interval_hours) || 2,
                 suggest_mode: sett.suggest_mode || 'average'
             });
-            await loadSuggestions();
+
+            // 家族共有メンバーのロード
+            if (activeFamilyId) {
+                const list = await runGas('getFamilyMembers', { familyId: activeFamilyId });
+                setFamilyMembers(list || []);
+            }
+
+            // サジェストのロード
+            try {
+                const s = await runGas('getSuggestions', { familyId: activeFamilyId, childId: activeChildId });
+                setSuggestions(s);
+                if (s.milkMl && s.milkMl.length) setMilkMl(s.milkMl[0]);
+                if (s.sleepMin && s.sleepMin.length) setSleepMin(s.sleepMin[0]);
+            } catch (e) { console.error(e); }
+
             if (userLocation) await loadNearbyFacilities(userLocation.lat, userLocation.lng);
         } catch (err) { console.error(err); }
+    };
+
+    // ─── 家族メンバー連携ハンドラー ───
+    const handleAddMember = async () => {
+        if (!newMemberEmail.trim()) return;
+        setMemberLoading(true);
+        try {
+            const res = await runGas('addFamilyMember', { familyId, email: newMemberEmail.trim() });
+            if (res.error) {
+                alert(res.message || '家族メンバーの追加に失敗しました。');
+            } else {
+                setNewMemberEmail('');
+                const list = await runGas('getFamilyMembers', { familyId });
+                setFamilyMembers(list || []);
+                alert('家族メンバーを追加しました！');
+            }
+        } catch (e) { alert('追加に失敗しました。'); }
+        finally { setMemberLoading(false); }
+    };
+
+    const handleRemoveMember = async (email) => {
+        if (!confirm(`${email} を家族連携から解除しますか？`)) return;
+        setMemberLoading(true);
+        try {
+            const res = await runGas('removeFamilyMember', { email });
+            if (res.error) {
+                alert(res.message || '連携解除に失敗しました。');
+            } else {
+                const list = await runGas('getFamilyMembers', { familyId });
+                setFamilyMembers(list || []);
+                alert('家族連携を解除しました。');
+            }
+        } catch (e) { alert('連携解除に失敗しました。'); }
+        finally { setMemberLoading(false); }
+    };
+
+    // ─── 家族・子供の更新・削除ハンドラー ───
+    const handleUpdateFamilyName = async (famId, newName) => {
+        if (!newName.trim()) return;
+        try {
+            const res = await runGas('updateFamily', { familyId: famId, name: newName.trim() });
+            if (res.error) {
+                alert(res.error);
+            } else {
+                setEditingFamilyId(null);
+                const fam = await runGas('getFamilies');
+                setFamilies(fam || []);
+            }
+        } catch (e) { alert('家族名の変更に失敗しました。'); }
+    };
+
+    const handleDeleteFamily = async (famId) => {
+        if (famId === 'fam_default') {
+            alert('デフォルトの家族は削除できません。');
+            return;
+        }
+        if (!confirm('この家族アカウントを削除しますか？紐づくお子さま情報やログもすべて削除され、所属メンバーはデフォルト家族へ移動します。')) return;
+        try {
+            const res = await runGas('deleteFamily', { familyId: famId });
+            if (res.error) {
+                alert(res.message || '家族の削除に失敗しました。');
+            } else {
+                setFamilyId('fam_default');
+                const fam = await runGas('getFamilies');
+                setFamilies(fam || []);
+                loadAllData('fam_default');
+                alert('家族アカウントを削除しました。');
+            }
+        } catch (e) { alert('削除に失敗しました。'); }
+    };
+
+    const handleUpdateChild = async (chId, newName, newBirth) => {
+        if (!newName.trim()) return;
+        try {
+            const res = await runGas('updateChild', { childId: chId, name: newName.trim(), birthDate: newBirth });
+            if (res.error) {
+                alert(res.error);
+            } else {
+                setEditingChildId(null);
+                const ch = await runGas('getChildren', { familyId });
+                setChildren(ch || []);
+            }
+        } catch (e) { alert('お子さま情報の更新に失敗しました。'); }
+    };
+
+    const handleDeleteChild = async (chId) => {
+        if (!confirm('このお子さま情報を削除しますか？')) return;
+        try {
+            const res = await runGas('deleteChild', { childId: chId });
+            if (res.error) {
+                alert(res.message || 'お子さまの削除に失敗しました。');
+            } else {
+                const ch = await runGas('getChildren', { familyId });
+                setChildren(ch || []);
+                if (ch.length > 0) setChildId(ch[0].id);
+                else setChildId('');
+                alert('お子さま情報を削除しました。');
+            }
+        } catch (e) { alert('削除に失敗しました。'); }
     };
 
     // Build note string from structured inputs
@@ -1110,8 +1426,142 @@ out center 20;`;
     const milkMinOpts = Array.from({ length: 25 }, (_, i) => i * 5);      // 0-120min, 5min step (0, 5, 10 ... 120)
     const sleepMinOpts = [10, 15, 20, 25, 30, 40, 50, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300, 360, 420, 480]; // sleep durations
 
+    // 未ログイン時の画面出し分け
+    if (!userEmail) {
+        return (
+            <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-violet-50 to-pink-50">
+                <div className="glass-panel w-full max-w-md rounded-3xl p-8 shadow-2xl border border-white/50 text-center space-y-6 animate-scale-up">
+                    <div className="flex flex-col items-center space-y-2">
+                        <div className="p-4 bg-indigo-600 rounded-3xl text-white shadow-lg shadow-indigo-200">
+                            <svg className="w-10 h-10 stroke-current" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                            </svg>
+                        </div>
+                        <h1 className="font-title font-bold text-3xl bg-gradient-to-r from-indigo-600 via-violet-600 to-pink-600 bg-clip-text text-transparent mt-2">
+                            ChildCompass
+                        </h1>
+                        <p className="text-sm text-slate-500 font-medium">育児ライフログ & AIパートナー</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 text-left my-4">
+                        <div className="p-3 bg-white/60 rounded-2xl border border-slate-100/50 space-y-1">
+                            <span className="text-xl">📝</span>
+                            <h4 className="text-xs font-bold text-slate-700">簡単ライフログ</h4>
+                            <p className="text-[10px] text-slate-400">授乳・睡眠・食事・排泄をワンタップ記録</p>
+                        </div>
+                        <div className="p-3 bg-white/60 rounded-2xl border border-slate-100/50 space-y-1">
+                            <span className="text-xl">📈</span>
+                            <h4 className="text-xs font-bold text-slate-700">成長曲線グラフ</h4>
+                            <p className="text-[10px] text-slate-400">身長・体重を自動グラフ化して可視化</p>
+                        </div>
+                        <div className="p-3 bg-white/60 rounded-2xl border border-slate-100/50 space-y-1">
+                            <span className="text-xl">🗺️</span>
+                            <h4 className="text-xs font-bold text-slate-700">お出かけマップ</h4>
+                            <p className="text-[10px] text-slate-400">周辺の公園や授乳室、おむつ台を検索</p>
+                        </div>
+                        <div className="p-3 bg-white/60 rounded-2xl border border-slate-100/50 space-y-1">
+                            <span className="text-xl">🤖</span>
+                            <h4 className="text-xs font-bold text-slate-700">AI相談・診断</h4>
+                            <p className="text-[10px] text-slate-400">助産師AIへの相談と、救急症状トリアージ</p>
+                        </div>
+                    </div>
+
+                    {authError && (
+                        <div className="bg-red-50 text-red-700 text-xs p-4 rounded-2xl border border-red-100 leading-relaxed text-left space-y-1">
+                            <span className="font-bold">⚠️ エラー:</span>
+                            <p>{authError}</p>
+                        </div>
+                    )}
+
+                    {!googleClientId ? (
+                        <div className="bg-amber-50/50 border border-amber-100 rounded-2xl p-4 text-left space-y-3">
+                            <div className="flex items-center space-x-1.5 text-amber-800">
+                                <span className="text-base">⚙️</span>
+                                <h3 className="text-xs font-bold">OAuth クライアント ID の設定 (初回のみ)</h3>
+                            </div>
+                            <p className="text-[11px] text-amber-700 leading-relaxed">
+                                このアプリは GitHub Pages から動作しているため、Googleログインを行うには OAuth クライアント ID を設定する必要があります。
+                            </p>
+                            <form onSubmit={(e) => {
+                                e.preventDefault();
+                                const val = e.target.clientIdInput.value.trim();
+                                if (val) {
+                                    setGoogleClientId(val);
+                                    localStorage.setItem('google_client_id', val);
+                                }
+                            }} className="space-y-2">
+                                <input 
+                                    name="clientIdInput"
+                                    type="text" 
+                                    placeholder="Google OAuth クライアント ID を入力" 
+                                    className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                                <button type="submit" className="w-full py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl shadow hover:bg-indigo-700 transition active:scale-95">
+                                    設定を保存して進む
+                                </button>
+                            </form>
+                            <div className="text-[10px] text-slate-400 leading-relaxed">
+                                <span className="font-bold">取得方法: </span> 
+                                Google Cloud Console でプロジェクトを作成し、「ウェブ アプリケーション」のクライアントIDを生成してください。承認済みの JavaScript 生成元に <code>https://kaz31wrk.github.io</code> を追加します。
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col items-center space-y-4">
+                            <div className="flex justify-center my-2">
+                                <div id="google-signin-btn"></div>
+                            </div>
+                            
+                            <button 
+                                onClick={() => {
+                                    setGoogleClientId('');
+                                    localStorage.removeItem('google_client_id');
+                                }}
+                                className="text-xs text-indigo-600 hover:text-indigo-800 underline transition"
+                            >
+                                クライアント ID を変更する
+                            </button>
+                        </div>
+                    )}
+
+                    {(location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !GAS_URL) && (
+                        <div className="pt-2 border-t border-slate-100">
+                            <button 
+                                onClick={() => {
+                                    setUserEmail('mock-parent@gmail.com');
+                                    localStorage.setItem('user_email', 'mock-parent@gmail.com');
+                                    loadAllData(null, 'mock-parent@gmail.com');
+                                }}
+                                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-2xl transition"
+                            >
+                                💻 デバッグ用モックでログイン
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="max-w-md mx-auto min-h-screen flex flex-col pb-28 md:max-w-3xl lg:max-w-none lg:w-full lg:px-8">
+            {authError && (
+                <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-red-100 text-center space-y-4 animate-scale-up">
+                        <div className="w-16 h-16 rounded-full bg-red-50 border border-red-100 flex items-center justify-center text-red-500 text-3xl mx-auto shadow-inner">
+                            ⚠️
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-800">同期エラーが発生しました</h3>
+                        <p className="text-sm text-slate-500 leading-relaxed bg-red-50 p-4 rounded-2xl border border-red-100/50">
+                            {authError}
+                        </p>
+                        <button onClick={() => { setAuthError(null); loadAllData(); }} 
+                            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-md transition-all active:scale-95">
+                            再試行する
+                        </button>
+                    </div>
+                </div>
+            )}
             {/* Header */}
             <header className="sticky top-0 z-30 backdrop-blur-md bg-white/80 border-b border-slate-100 px-4 py-3 shadow-sm space-y-2">
                 <div className="flex items-center justify-between">
@@ -1146,50 +1596,190 @@ out center 20;`;
 
             {showSettings && (
                 <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-4" onClick={() => setShowSettings(false)}>
-                    <div className="bg-white rounded-2xl p-4 w-full max-w-md max-h-[85vh] overflow-y-auto shadow-xl" onClick={e => e.stopPropagation()}>
-                        <h3 className="font-bold text-slate-800 mb-3">設定・家族管理</h3>
-                        <div className="space-y-3 text-sm">
-                            <div>
-                                <label className="text-[10px] font-bold text-slate-400 uppercase">次回サジェスト（授乳間隔・時間）</label>
-                                <select value={settingsForm.suggest_mode} onChange={e => setSettingsForm(s => ({ ...s, suggest_mode: e.target.value }))}
-                                    className="w-full mt-1 custom-select bg-slate-50 border rounded-xl px-3 py-2">
-                                    <option value="average">直近の平均間隔</option>
-                                    <option value="last">前回の間隔</option>
-                                    <option value="fixed">固定間隔（下の設定値）</option>
-                                </select>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-white rounded-3xl p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-center border-b pb-3">
+                            <h3 className="font-bold text-slate-800 text-base">設定・家族管理</h3>
+                            <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+                        </div>
+                        
+                        <div className="space-y-4 text-xs">
+                            {/* アカウント情報・共有設定 */}
+                            {userEmail && (
+                                <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-3.5 space-y-2">
+                                    <div className="font-bold text-indigo-950 flex items-center space-x-1.5">
+                                        <span>👤</span><span>ログイン中のアカウント: {userEmail}</span>
+                                    </div>
+                                    <div className="border-t border-indigo-200/50 pt-2 space-y-2">
+                                        <div className="font-bold text-slate-600 text-[10px] uppercase">家族連携メンバー（同じデータを見るメンバー）</div>
+                                        <div className="space-y-1.5 max-h-24 overflow-y-auto pr-1">
+                                            {familyMembers.map((m, mi) => (
+                                                <div key={mi} className="flex justify-between items-center bg-white/80 border border-indigo-100/50 rounded-xl px-2.5 py-1 text-[11px]">
+                                                    <span className="text-slate-700 truncate">{m.email} {m.role === 'admin' && <span className="text-[9px] bg-indigo-100 text-indigo-700 font-bold px-1 py-0.25 rounded-md ml-1">管理者</span>}</span>
+                                                    {m.email.toLowerCase() !== userEmail.toLowerCase() && (
+                                                        <button type="button" onClick={() => handleRemoveMember(m.email)} className="text-red-500 hover:text-red-700 font-bold px-1">解除</button>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="flex gap-1.5 pt-1">
+                                            <input type="email" value={newMemberEmail} onChange={e => setNewMemberEmail(e.target.value)} placeholder="追加するGoogleメールアドレス"
+                                                className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                                            <button type="button" onClick={handleAddMember} disabled={memberLoading} className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl disabled:opacity-50">追加</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* 予測・サジェスト設定 */}
+                            <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
                                 <div>
-                                    <label className="text-[10px] font-bold text-slate-400">授乳間隔（時間）</label>
-                                    <input type="number" step="0.5" min="1" max="8" value={settingsForm.feed_interval_hours}
-                                        onChange={e => setSettingsForm(s => ({ ...s, feed_interval_hours: parseFloat(e.target.value) }))}
-                                        className="w-full mt-1 bg-slate-50 border rounded-xl px-3 py-2" />
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase">次回サジェスト（予測モード）</label>
+                                    <select value={settingsForm.suggest_mode} onChange={e => setSettingsForm(s => ({ ...s, suggest_mode: e.target.value }))}
+                                        className="w-full mt-1 custom-select bg-white border border-slate-200 rounded-xl px-3 py-2 font-semibold text-slate-700">
+                                        <option value="average">直近の平均間隔</option>
+                                        <option value="last">前回の間隔</option>
+                                        <option value="fixed">固定間隔（下の設定値）</option>
+                                    </select>
                                 </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400">授乳間隔（時間）</label>
+                                        <input type="number" step="0.5" min="1" max="8" value={settingsForm.feed_interval_hours}
+                                            onChange={e => setSettingsForm(s => ({ ...s, feed_interval_hours: parseFloat(e.target.value) }))}
+                                            className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2" />
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400">睡眠間隔（時間）</label>
+                                        <input type="number" step="0.5" min="0.5" max="12" value={settingsForm.sleep_interval_hours}
+                                            onChange={e => setSettingsForm(s => ({ ...s, sleep_interval_hours: parseFloat(e.target.value) }))}
+                                            className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2" />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 家族アカウントの編集・削除・追加 */}
+                            <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block">家族アカウントの管理・編集</label>
+                                <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                                    {families.map((f) => (
+                                        <div key={f.id} className="flex items-center justify-between bg-white border border-slate-200 rounded-xl p-2">
+                                            {editingFamilyId === f.id ? (
+                                                <div className="flex items-center gap-1 w-full">
+                                                    <input value={editingFamilyName} onChange={e => setEditingFamilyName(e.target.value)}
+                                                        className="flex-1 bg-slate-50 border rounded-lg px-2 py-1 text-xs" />
+                                                    <button type="button" onClick={() => handleUpdateFamilyName(f.id, editingFamilyName)} className="px-2 py-1 bg-indigo-600 text-white text-[10px] font-bold rounded-lg">保存</button>
+                                                    <button type="button" onClick={() => setEditingFamilyId(null)} className="px-2 py-1 bg-slate-200 text-slate-600 text-[10px] font-bold rounded-lg">取消</button>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className="font-semibold text-slate-700 flex items-center space-x-1">
+                                                        <span>👨‍👩‍👧‍👦</span><span>{f.name}</span>
+                                                        <span className="text-[9px] text-slate-400 font-mono">({f.id})</span>
+                                                    </div>
+                                                    <div className="flex items-center space-x-1 shrink-0">
+                                                        <button type="button" onClick={() => { setEditingFamilyId(f.id); setEditingFamilyName(f.name); }} className="px-2 py-1 bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 text-indigo-600 text-[10px] font-bold rounded-lg transition-colors">編集</button>
+                                                        {f.id !== 'fam_default' && (
+                                                            <button type="button" onClick={() => handleDeleteFamily(f.id)} className="px-2 py-1 bg-red-50 border border-red-100 hover:bg-red-100 text-red-600 text-[10px] font-bold rounded-lg transition-colors">削除</button>
+                                                        )}
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="border-t pt-2.5">
+                                    <label className="text-[10px] font-bold text-slate-400">新しい家族アカウントを追加</label>
+                                    <div className="flex gap-2 mt-1">
+                                        <input value={newFamilyName} onChange={e => setNewFamilyName(e.target.value)} placeholder="例）実家のアカウント"
+                                            className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs" />
+                                        <button type="button" onClick={handleAddFamily} className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shrink-0">追加</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* お子さま情報の編集・削除・追加 */}
+                            <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block">お子さま情報の編集・管理</label>
+                                <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                                    {children.map((c) => (
+                                        <div key={c.id} className="flex flex-col bg-white border border-slate-200 rounded-xl p-2 space-y-1.5">
+                                            {editingChildId === c.id ? (
+                                                <div className="space-y-1.5 w-full">
+                                                    <input value={editingChildName} onChange={e => setEditingChildName(e.target.value)} placeholder="お名前"
+                                                        className="w-full bg-slate-50 border rounded-lg px-2 py-1 text-xs" />
+                                                    <input type="date" value={editingChildBirth} onChange={e => setEditingChildBirth(e.target.value)}
+                                                        className="w-full bg-slate-50 border rounded-lg px-2 py-1 text-xs" />
+                                                    <div className="flex justify-end space-x-1">
+                                                        <button type="button" onClick={() => handleUpdateChild(c.id, editingChildName, editingChildBirth)} className="px-2 py-1 bg-indigo-600 text-white text-[10px] font-bold rounded-lg">保存</button>
+                                                        <button type="button" onClick={() => setEditingChildId(null)} className="px-2 py-1 bg-slate-200 text-slate-600 text-[10px] font-bold rounded-lg">取消</button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center justify-between">
+                                                    <div className="font-semibold text-slate-700">
+                                                        <span className="mr-1">👶</span>{c.name || 'お子さま'}
+                                                        {c.birth_date && <span className="text-[10px] text-slate-400 block font-mono">誕生日: {c.birth_date}</span>}
+                                                    </div>
+                                                    <div className="flex items-center space-x-1 shrink-0">
+                                                        <button type="button" onClick={() => { setEditingChildId(c.id); setEditingChildName(c.name || ''); setEditingChildBirth(c.birth_date || ''); }} className="px-2 py-1 bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 text-indigo-600 text-[10px] font-bold rounded-lg transition-colors">編集</button>
+                                                        <button type="button" onClick={() => handleDeleteChild(c.id)} className="px-2 py-1 bg-red-50 border border-red-100 hover:bg-red-100 text-red-600 text-[10px] font-bold rounded-lg transition-colors">削除</button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="border-t pt-2.5">
+                                    <label className="text-[10px] font-bold text-slate-400">新しいお子さまを追加</label>
+                                    <input value={newChildName} onChange={e => setNewChildName(e.target.value)} placeholder="名前"
+                                        className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs" />
+                                    <input type="date" value={newChildBirth} onChange={e => setNewChildBirth(e.target.value)}
+                                        className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs" />
+                                    <button type="button" onClick={handleAddChild} className="mt-2 w-full py-2 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl transition-all shadow-md">お子さまを登録</button>
+                                </div>
+                            </div>
+
+                            {/* Google認証設定（OAuthクライアントID変更 / ログアウト） */}
+                            <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase block">Google認証設定</label>
                                 <div>
-                                    <label className="text-[10px] font-bold text-slate-400">睡眠間隔（時間）</label>
-                                    <input type="number" step="0.5" min="0.5" max="12" value={settingsForm.sleep_interval_hours}
-                                        onChange={e => setSettingsForm(s => ({ ...s, sleep_interval_hours: parseFloat(e.target.value) }))}
-                                        className="w-full mt-1 bg-slate-50 border rounded-xl px-3 py-2" />
+                                    <label className="text-[10px] font-bold text-slate-400">Google OAuth クライアント ID</label>
+                                    <input 
+                                        type="text" 
+                                        value={googleClientId} 
+                                        onChange={e => {
+                                            const val = e.target.value.trim();
+                                            setGoogleClientId(val);
+                                            if (val) {
+                                                localStorage.setItem('google_client_id', val);
+                                            } else {
+                                                localStorage.removeItem('google_client_id');
+                                            }
+                                        }}
+                                        placeholder="OAuth クライアント ID を入力"
+                                        className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" 
+                                    />
+                                </div>
+                                <div className="border-t pt-2.5">
+                                    <button 
+                                        type="button" 
+                                        onClick={() => {
+                                            if (confirm('ログアウトしますか？')) {
+                                                handleLogout();
+                                                setShowSettings(false);
+                                            }
+                                        }} 
+                                        className="w-full py-2 bg-red-50 border border-red-100 hover:bg-red-100 text-red-600 font-bold rounded-xl transition-all text-xs"
+                                    >
+                                        Google アカウントからログアウト
+                                    </button>
                                 </div>
                             </div>
-                            <p className="text-[11px] text-slate-500">複数のお子さまは「お子さま」切替で記録を分けます。別家族は「家族」を追加して切り替えてください（データはスプレッドシートに蓄積されます）。</p>
-                            <div className="border-t pt-3">
-                                <label className="text-[10px] font-bold text-slate-400">家族を追加</label>
-                                <div className="flex gap-2 mt-1">
-                                    <input value={newFamilyName} onChange={e => setNewFamilyName(e.target.value)} placeholder="例）祖母の家"
-                                        className="flex-1 bg-slate-50 border rounded-xl px-3 py-2 text-sm" />
-                                    <button type="button" onClick={handleAddFamily} className="px-3 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl">追加</button>
-                                </div>
+                            
+                            <div className="flex gap-2.5 pt-2 border-t">
+                                <button type="button" onClick={() => setShowSettings(false)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl">閉じる</button>
+                                <button type="button" onClick={handleSaveSettings} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-md">設定を保存</button>
                             </div>
-                            <div>
-                                <label className="text-[10px] font-bold text-slate-400">お子さまを追加</label>
-                                <input value={newChildName} onChange={e => setNewChildName(e.target.value)} placeholder="名前"
-                                    className="w-full mt-1 bg-slate-50 border rounded-xl px-3 py-2 text-sm" />
-                                <input type="date" value={newChildBirth} onChange={e => setNewChildBirth(e.target.value)}
-                                    className="w-full mt-1 bg-slate-50 border rounded-xl px-3 py-2 text-sm" />
-                                <button type="button" onClick={handleAddChild} className="mt-2 w-full py-2 bg-violet-600 text-white text-xs font-bold rounded-xl">お子さまを登録</button>
-                            </div>
-                            <button onClick={handleSaveSettings} className="w-full py-2.5 bg-indigo-600 text-white font-bold rounded-xl">設定を保存</button>
                         </div>
                     </div>
                 </div>

@@ -72,6 +72,14 @@ function handleAction(actionName, params) {
     case 'getGeminiPromptAndKey': return getGeminiPromptAndKey_(params);
     case 'getSymptomPromptAndKey': return getSymptomPromptAndKey_(params);
     case 'getLogsSummaryPromptAndKey': return getLogsSummaryPromptAndKey_(params);
+    case 'getOrCheckUser': return getOrCheckUser_(params);
+    case 'getFamilyMembers': return getFamilyMembers_(params);
+    case 'addFamilyMember': return addFamilyMember_(params);
+    case 'removeFamilyMember': return removeFamilyMember_(params);
+    case 'updateFamily': return updateFamily_(params);
+    case 'deleteFamily': return deleteFamily_(params);
+    case 'updateChild': return updateChild_(params);
+    case 'deleteChild': return deleteChild_(params);
     default: return { error: 'invalid_action' };
   }
 }
@@ -98,7 +106,15 @@ function initSpreadsheet() {
   if (!activeSS) throw new Error("Active Spreadsheet is not accessible.");
 
   ensureSheet('errors', ['timestamp', 'context', 'message', 'stack']);
+  ensureSheet('users', ['email', 'family_id', 'role']);
   ensureSheet('growth', ['timestamp', 'family_id', 'child_id', 'height', 'weight', 'head_circumference']);
+
+  // APIキーの自動設定
+  let geminiApiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!geminiApiKey) {
+    geminiApiKey = "YOUR_GEMINI_API_KEY"; // 安全のためプレースホルダー（GASのスクリプトプロパティに手動で設定可能）
+    PropertiesService.getScriptProperties().setProperty("GEMINI_API_KEY", geminiApiKey);
+  }
 
   ensureSheet('logs', ['timestamp', 'type', 'note', 'family_id', 'child_id'], () => {
     const ts = formatNowJst();
@@ -1076,4 +1092,204 @@ ${params.symptom || '体調不良'}`;
     prompt: systemPrompt,
     apiKey: apiKey
   };
+}
+
+// ─── 認証・家族連携・編集 API ──────────────────────────────────────
+function getOrCheckUser_(params) {
+  let email = params && params.email;
+  if (!email) {
+    email = Session.getActiveUser().getEmail();
+  }
+  if (!email) {
+    return { error: 'email_not_available', message: 'Googleアカウント情報が取得できません。' };
+  }
+  const users = getData('users');
+  const user = users.find(u => String(u.email).toLowerCase() === email.toLowerCase());
+  
+  if (!user) {
+    // 新規ユーザー登録
+    const familyId = 'fam_' + Utilities.getUuid().substring(0, 8);
+    const childId = 'child_' + Utilities.getUuid().substring(0, 8);
+    
+    const usersSheet = SS.getSheetByName('users');
+    usersSheet.appendRow([email, familyId, 'admin']);
+    
+    SS.getSheetByName('families').appendRow([familyId, 'わが家']);
+    SS.getSheetByName('children').appendRow([childId, familyId, 'お子さま', '']);
+    
+    // デフォルト設定
+    const settingsSheet = SS.getSheetByName('settings');
+    const defaults = [
+      [familyId, 'feed_interval_hours', '3'],
+      [familyId, 'sleep_interval_hours', '2'],
+      [familyId, 'suggest_mode', 'average'],
+      [familyId, 'milk_ml_suggestions', '100,120,140,160,200'],
+      [familyId, 'sleep_min_suggestions', '30,60,90,120']
+    ];
+    defaults.forEach(r => settingsSheet.appendRow(r));
+    
+    return { email, familyId, childId, isNew: true };
+  }
+  
+  // ユーザーが見つかった場合、家族に紐づく子供リストを取得
+  const children = getChildrenFiltered({ familyId: user.family_id });
+  const childId = children.length > 0 ? children[0].id : '';
+  return { email, familyId: user.family_id, childId, isNew: false };
+}
+
+function getFamilyMembers_(params) {
+  const familyId = params.familyId;
+  if (!familyId) return [];
+  const users = getData('users');
+  return users.filter(u => u.family_id === familyId).map(u => ({ email: u.email, role: u.role }));
+}
+
+function addFamilyMember_(params) {
+  const familyId = params.familyId;
+  const emailToAdd = String(params.email).trim().toLowerCase();
+  if (!familyId || !emailToAdd) return { error: 'invalid_params' };
+  
+  const sheet = SS.getSheetByName('users');
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).toLowerCase() === emailToAdd) {
+      // すでに登録があれば家族IDを上書きして共有する
+      sheet.getRange(i + 1, 2).setValue(familyId);
+      sheet.getRange(i + 1, 3).setValue('member');
+      return { status: 'success', updated: true };
+    }
+  }
+  // 新規登録
+  sheet.appendRow([emailToAdd, familyId, 'member']);
+  return { status: 'success', updated: false };
+}
+
+function removeFamilyMember_(params) {
+  const emailToRemove = String(params.email).trim().toLowerCase();
+  if (!emailToRemove) return { error: 'invalid_params' };
+  
+  let myEmail = params.myEmail;
+  if (!myEmail) {
+    myEmail = Session.getActiveUser().getEmail();
+  }
+  if (myEmail && myEmail.toLowerCase() === emailToRemove) {
+    return { error: 'cannot_remove_self', message: '自分自身を家族から外すことはできません。' };
+  }
+  
+  const sheet = SS.getSheetByName('users');
+  const rows = sheet.getDataRange().getValues();
+  for (let i = rows.length - 1; i >= 1; i--) {
+    if (String(rows[i][0]).toLowerCase() === emailToRemove) {
+      // 家族から外し、独立した新しい家族IDを自動生成して割り当てる（完全に独立させる）
+      const newFamilyId = 'fam_' + Utilities.getUuid().substring(0, 8);
+      const newChildId = 'child_' + Utilities.getUuid().substring(0, 8);
+      
+      sheet.getRange(i + 1, 2).setValue(newFamilyId);
+      sheet.getRange(i + 1, 3).setValue('admin');
+      
+      SS.getSheetByName('families').appendRow([newFamilyId, 'わが家']);
+      SS.getSheetByName('children').appendRow([newChildId, newFamilyId, 'お子さま', '']);
+      
+      const settingsSheet = SS.getSheetByName('settings');
+      const defaults = [
+        [newFamilyId, 'feed_interval_hours', '3'],
+        [newFamilyId, 'sleep_interval_hours', '2'],
+        [newFamilyId, 'suggest_mode', 'average'],
+        [newFamilyId, 'milk_ml_suggestions', '100,120,140,160,200'],
+        [newFamilyId, 'sleep_min_suggestions', '30,60,90,120']
+      ];
+      defaults.forEach(r => settingsSheet.appendRow(r));
+      
+      return { status: 'success' };
+    }
+  }
+  return { error: 'not_found' };
+}
+
+function updateFamily_(params) {
+  const familyId = params.familyId;
+  const name = params.name;
+  if (!familyId || !name) return { error: 'invalid_params' };
+  
+  const sheet = SS.getSheetByName('families');
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === familyId) {
+      sheet.getRange(i + 1, 2).setValue(name);
+      return { status: 'success' };
+    }
+  }
+  return { error: 'not_found' };
+}
+
+function deleteFamily_(params) {
+  const familyId = params.familyId;
+  if (!familyId) return { error: 'invalid_params' };
+  
+  if (familyId === DEFAULT_FAMILY_ID) {
+    return { error: 'cannot_delete_default_family', message: 'デフォルトの家族は削除できません。' };
+  }
+  
+  // 家族データを削除
+  const fSheet = SS.getSheetByName('families');
+  const fRows = fSheet.getDataRange().getValues();
+  for (let i = fRows.length - 1; i >= 1; i--) {
+    if (fRows[i][0] === familyId) {
+      fSheet.deleteRow(i + 1);
+    }
+  }
+  
+  // 関連する子供も削除
+  const cSheet = SS.getSheetByName('children');
+  const cRows = cSheet.getDataRange().getValues();
+  for (let i = cRows.length - 1; i >= 1; i--) {
+    if (cRows[i][1] === familyId) {
+      cSheet.deleteRow(i + 1);
+    }
+  }
+  
+  // ユーザーの所属家族をリセット（デフォルト家族へ移動）
+  const uSheet = SS.getSheetByName('users');
+  const uRows = uSheet.getDataRange().getValues();
+  for (let i = 1; i < uRows.length; i++) {
+    if (uRows[i][1] === familyId) {
+      uSheet.getRange(i + 1, 2).setValue(DEFAULT_FAMILY_ID);
+      uSheet.getRange(i + 1, 3).setValue('member');
+    }
+  }
+  
+  return { status: 'success' };
+}
+
+function updateChild_(params) {
+  const childId = params.childId;
+  const name = params.name;
+  const birthDate = params.birthDate;
+  if (!childId || !name) return { error: 'invalid_params' };
+  
+  const sheet = SS.getSheetByName('children');
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === childId) {
+      sheet.getRange(i + 1, 3).setValue(name);
+      sheet.getRange(i + 1, 4).setValue(birthDate || '');
+      return { status: 'success' };
+    }
+  }
+  return { error: 'not_found' };
+}
+
+function deleteChild_(params) {
+  const childId = params.childId;
+  if (!childId) return { error: 'invalid_params' };
+  
+  const sheet = SS.getSheetByName('children');
+  const rows = sheet.getDataRange().getValues();
+  for (let i = rows.length - 1; i >= 1; i--) {
+    if (rows[i][0] === childId) {
+      sheet.deleteRow(i + 1);
+      return { status: 'success' };
+    }
+  }
+  return { error: 'not_found' };
 }
