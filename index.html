@@ -1111,7 +1111,7 @@ out center 20;`;
     const sleepMinOpts = [10, 15, 20, 25, 30, 40, 50, 60, 75, 90, 105, 120, 150, 180, 210, 240, 300, 360, 420, 480]; // sleep durations
 
     return (
-        <div className="max-w-md mx-auto min-h-screen flex flex-col pb-28 md:max-w-3xl lg:max-w-6xl lg:px-4">
+        <div className="max-w-md mx-auto min-h-screen flex flex-col pb-28 md:max-w-3xl lg:max-w-none lg:w-full lg:px-8">
             {/* Header */}
             <header className="sticky top-0 z-30 backdrop-blur-md bg-white/80 border-b border-slate-100 px-4 py-3 shadow-sm space-y-2">
                 <div className="flex items-center justify-between">
@@ -2152,7 +2152,7 @@ out center 20;`;
             </main>
 
             {/* Bottom Tab Bar */}
-            <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/85 backdrop-blur-md border-t border-slate-100 shadow-lg max-w-md mx-auto md:max-w-3xl lg:max-w-6xl">
+            <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/85 backdrop-blur-md border-t border-slate-100 shadow-lg max-w-md mx-auto md:max-w-3xl lg:max-w-none">
                 <div className="flex justify-around items-center py-2 px-1">
                     {[
                         { id: 'dashboard', label: '記録', icon: <Icon.Home /> },
