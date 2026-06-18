@@ -1179,25 +1179,29 @@ out center 20;`;
 
                     // ── Phase 2: ログ・マイルストーン・成長・サジェストをバックグラウンドで取得 ──
                     const c = { familyId: activeFamilyId, childId: activeChildId };
-                    Promise.all([
-                        runGas('getLogs', c),
-                        runGas('getMilestones', c),
-                        runGas('getGrowth', c)
-                    ]).then(([l, m, g]) => {
-                        setLogs(l || []);
-                        setMilestones(m || []);
-                        setGrowthData(g || []);
-                    }).catch(e => console.error('Phase2 data load error:', e));
+                    const [l, m, g, s] = await Promise.all([
+                        runGas('getLogs', c).catch(() => []),
+                        runGas('getMilestones', c).catch(() => []),
+                        runGas('getGrowth', c).catch(() => []),
+                        runGas('getSuggestions', c).catch(() => null)
+                    ]);
 
-                    runGas('getSuggestions', c).then(s => {
-                        if (!s) return;
+                    if (l) setLogs(l);
+                    if (m) setMilestones(m);
+                    if (g) setGrowthData(g);
+
+                    if (s && !s.error) {
                         setSuggestions(s);
                         if (s.milkMl && s.milkMl.length) setMilkMl(s.milkMl[0]);
                         if (s.sleepMin && s.sleepMin.length) setSleepMin(s.sleepMin[0]);
-                    }).catch(e => console.error('Suggestions load error:', e));
+                    }
 
                     if (userLocation) await loadNearbyFacilities(userLocation.lat, userLocation.lng);
-                } catch (err) { console.error(err); }
+                } catch (err) { 
+                    console.error(err); 
+                } finally {
+                    setGlobalLoading(false);
+                }
             };
 
 
