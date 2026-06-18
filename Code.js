@@ -1,4 +1,6 @@
-const SS = SpreadsheetApp.getActiveSpreadsheet();
+function getSS_() {
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
 
 const GEMINI_MODELS = [
   "gemini-2.5-flash",
@@ -74,42 +76,65 @@ function handleAction(actionName, params) {
     }
   }
 
-  switch (actionName) {
-    case 'addLog': return addLog_(params);
-    case 'toggleMilestone': return toggleMilestone_(params);
-    case 'hideMilestone': return hideMilestone_(params);
-    case 'addMilestone': return addMilestone_(params);
-    case 'customizeMilestonesAI': return customizeMilestonesAI_(params);
-    case 'askGemini': return { reply: askGemini(params.question, params.familyId, params.childId) };
-    case 'summarizeLogs': return { summary: summarizeLogs(params.familyId, params.childId) };
-    case 'searchNearbyFacilities': return searchNearbyFacilities_(params);
-    case 'saveSettings': return saveSettings_(params);
-    case 'addFamily': return addFamily_(params);
-    case 'addChild': return addChild_(params);
-    case 'getLogs': return getLogsFiltered(params);
-    case 'getMilestones': return getMilestonesFiltered(params);
-    case 'getChildren': return getChildrenFiltered(params);
-    case 'getFamilies': return getFamiliesFiltered_(params);
-    case 'getSettings': return getSettingsMap(params.familyId || DEFAULT_FAMILY_ID);
-    case 'getSuggestions': return getLogSuggestions(params);
-    case 'addGrowth': return addGrowth_(params);
-    case 'getGrowth': return getGrowthFiltered(params);
-    case 'getNearbyPlaces': return getNearbyPlaces_(params);
-    case 'geocodeAddress': return geocodeAddress_(params);
-    case 'evaluateSymptomAI': return evaluateSymptomAI_(params);
-    case 'getGeminiPromptAndKey': return getGeminiPromptAndKey_(params);
-    case 'getSymptomPromptAndKey': return getSymptomPromptAndKey_(params);
-    case 'getLogsSummaryPromptAndKey': return getLogsSummaryPromptAndKey_(params);
-    case 'getOrCheckUser': return getOrCheckUser_(params);
-    case 'getInitialData': return getInitialData_(params);
-    case 'getFamilyMembers': return getFamilyMembers_(params);
-    case 'addFamilyMember': return addFamilyMember_(params);
-    case 'removeFamilyMember': return removeFamilyMember_(params);
-    case 'updateFamily': return updateFamily_(params);
-    case 'deleteFamily': return deleteFamily_(params);
-    case 'updateChild': return updateChild_(params);
-    case 'deleteChild': return deleteChild_(params);
-    default: return { error: 'invalid_action' };
+  const writeActions = [
+    'addLog', 'toggleMilestone', 'hideMilestone', 'addMilestone', 'saveSettings',
+    'addFamily', 'addChild', 'addGrowth', 'getOrCheckUser', 'addFamilyMember',
+    'removeFamilyMember', 'updateFamily', 'deleteFamily', 'updateChild', 'deleteChild'
+  ];
+
+  const execute = () => {
+    switch (actionName) {
+      case 'addLog': return addLog_(params);
+      case 'toggleMilestone': return toggleMilestone_(params);
+      case 'hideMilestone': return hideMilestone_(params);
+      case 'addMilestone': return addMilestone_(params);
+      case 'customizeMilestonesAI': return customizeMilestonesAI_(params);
+      case 'askGemini': return { reply: askGemini(params.question, params.familyId, params.childId) };
+      case 'summarizeLogs': return { summary: summarizeLogs(params.familyId, params.childId) };
+      case 'searchNearbyFacilities': return searchNearbyFacilities_(params);
+      case 'saveSettings': return saveSettings_(params);
+      case 'addFamily': return addFamily_(params);
+      case 'addChild': return addChild_(params);
+      case 'getLogs': return getLogsFiltered(params);
+      case 'getMilestones': return getMilestonesFiltered(params);
+      case 'getChildren': return getChildrenFiltered(params);
+      case 'getFamilies': return getFamiliesFiltered_(params);
+      case 'getSettings': return getSettingsMap(params.familyId || DEFAULT_FAMILY_ID);
+      case 'getSuggestions': return getLogSuggestions(params);
+      case 'addGrowth': return addGrowth_(params);
+      case 'getGrowth': return getGrowthFiltered(params);
+      case 'getNearbyPlaces': return getNearbyPlaces_(params);
+      case 'geocodeAddress': return geocodeAddress_(params);
+      case 'evaluateSymptomAI': return evaluateSymptomAI_(params);
+      case 'getGeminiPromptAndKey': return getGeminiPromptAndKey_(params);
+      case 'getSymptomPromptAndKey': return getSymptomPromptAndKey_(params);
+      case 'getLogsSummaryPromptAndKey': return getLogsSummaryPromptAndKey_(params);
+      case 'getOrCheckUser': return getOrCheckUser_(params);
+      case 'getInitialData': return getInitialData_(params);
+      case 'getFamilyMembers': return getFamilyMembers_(params);
+      case 'addFamilyMember': return addFamilyMember_(params);
+      case 'removeFamilyMember': return removeFamilyMember_(params);
+      case 'updateFamily': return updateFamily_(params);
+      case 'deleteFamily': return deleteFamily_(params);
+      case 'updateChild': return updateChild_(params);
+      case 'deleteChild': return deleteChild_(params);
+      default: return { error: 'invalid_action' };
+    }
+  };
+
+  if (writeActions.includes(actionName)) {
+    const lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(10000);
+      return execute();
+    } catch (e) {
+      if (typeof logError_ === 'function') logError_(e, `Action error: ${actionName}`);
+      return { error: 'write_action_error', message: String(e) };
+    } finally {
+      lock.releaseLock();
+    }
+  } else {
+    return execute();
   }
 }
 
@@ -147,13 +172,13 @@ function initSpreadsheet() {
 
   ensureSheet('logs', ['timestamp', 'type', 'note', 'family_id', 'child_id'], () => {
     const ts = formatNowJst();
-    activeSS.getSheetByName('logs').appendRow([ts, '授乳', '量: 100ml, 時間: 10分', DEFAULT_FAMILY_ID, DEFAULT_CHILD_ID]);
+    activegetSS_().getSheetByName('logs').appendRow([ts, '授乳', '量: 100ml, 時間: 10分', DEFAULT_FAMILY_ID, DEFAULT_CHILD_ID]);
   }, upgradeLogsSheet);
 
   ensureFamiliesAndChildren(activeSS);
 
   ensureSheet('settings', ['family_id', 'key', 'value'], () => {
-    const sheet = activeSS.getSheetByName('settings');
+    const sheet = activegetSS_().getSheetByName('settings');
     const defaults = [
       [DEFAULT_FAMILY_ID, 'feed_interval_hours', '3'],
       [DEFAULT_FAMILY_ID, 'sleep_interval_hours', '2'],
@@ -224,7 +249,7 @@ function initMilestonesSheet(ss) {
 
 // ─── ログ ─────────────────────────────────────────────────────
 function addLog_(params) {
-  const sheet = SS.getSheetByName('logs');
+  const sheet = getSS_().getSheetByName('logs');
   const timestamp = params.timestamp
     ? normalizeTimestamp(params.timestamp)
     : formatNowJst();
@@ -403,7 +428,7 @@ function saveSettings_(params) {
 }
 
 function saveSettingValue(familyId, key, value) {
-  const sheet = SS.getSheetByName('settings');
+  const sheet = getSS_().getSheetByName('settings');
   const rows = sheet.getDataRange().getValues();
   for (let i = 1; i < rows.length; i++) {
     if (rows[i][0] === familyId && rows[i][1] === key) {
@@ -416,7 +441,7 @@ function saveSettingValue(familyId, key, value) {
 
 function addFamily_(params) {
   const id = 'fam_' + Utilities.getUuid().substring(0, 8);
-  SS.getSheetByName('families').appendRow([id, params.name || '新しい家族']);
+  getSS_().getSheetByName('families').appendRow([id, params.name || '新しい家族']);
   [['feed_interval_hours', '3'], ['sleep_interval_hours', '2'], ['suggest_mode', 'average']].forEach(([k, v]) => {
     saveSettingValue(id, k, v);
   });
@@ -426,7 +451,7 @@ function addFamily_(params) {
 function addChild_(params) {
   const familyId = params.familyId || DEFAULT_FAMILY_ID;
   const id = 'child_' + Utilities.getUuid().substring(0, 8);
-  SS.getSheetByName('children').appendRow([id, familyId, params.name || 'お子さま', params.birthDate || '']);
+  getSS_().getSheetByName('children').appendRow([id, familyId, params.name || 'お子さま', params.birthDate || '']);
   return { status: 'success', id, name: params.name };
 }
 
@@ -592,7 +617,7 @@ function getMilestonesFiltered(params) {
 }
 
 function toggleMilestone_(params) {
-  const sheet = SS.getSheetByName('milestones');
+  const sheet = getSS_().getSheetByName('milestones');
   const rows = sheet.getDataRange().getValues();
   const id = String(params.id);
   for (let i = 1; i < rows.length; i++) {
@@ -605,7 +630,7 @@ function toggleMilestone_(params) {
 }
 
 function hideMilestone_(params) {
-  const sheet = SS.getSheetByName('milestones');
+  const sheet = getSS_().getSheetByName('milestones');
   const rows = sheet.getDataRange().getValues();
   const id = String(params.id);
   for (let i = 1; i < rows.length; i++) {
@@ -618,7 +643,7 @@ function hideMilestone_(params) {
 }
 
 function addMilestone_(params) {
-  const sheet = SS.getSheetByName('milestones');
+  const sheet = getSS_().getSheetByName('milestones');
   const rows = sheet.getDataRange().getValues();
   let maxId = 0;
   for (let i = 1; i < rows.length; i++) {
@@ -811,7 +836,7 @@ function fetchGemini(payload, apiKey) {
 }
 
 function getData(sheetName) {
-  const sheet = SS.getSheetByName(sheetName);
+  const sheet = getSS_().getSheetByName(sheetName);
   if (!sheet) return [];
   const rows = sheet.getDataRange().getValues();
   if (rows.length <= 1) return [];
@@ -841,7 +866,7 @@ function logError_(err, context = '') {
   try {
     const activeSS = SpreadsheetApp.getActiveSpreadsheet();
     if (!activeSS) return;
-    let sheet = activeSS.getSheetByName('errors');
+    let sheet = activegetSS_().getSheetByName('errors');
     if (!sheet) {
       sheet = activeSS.insertSheet('errors');
       sheet.appendRow(['timestamp', 'context', 'message', 'stack']);
@@ -855,7 +880,7 @@ function logError_(err, context = '') {
 
 // ─── 成長記録 API ─────────────────────────────────────────────
 function addGrowth_(params) {
-  const sheet = SS.getSheetByName('growth');
+  const sheet = getSS_().getSheetByName('growth');
   const timestamp = params.timestamp ? normalizeTimestamp(params.timestamp) : formatNowJst();
   const familyId = params.familyId || DEFAULT_FAMILY_ID;
   const childId = params.childId || DEFAULT_CHILD_ID;
@@ -1139,14 +1164,14 @@ function getOrCheckUser_(params) {
     const familyId = 'fam_' + Utilities.getUuid().substring(0, 8);
     const childId = 'child_' + Utilities.getUuid().substring(0, 8);
     
-    const usersSheet = SS.getSheetByName('users');
+    const usersSheet = getSS_().getSheetByName('users');
     usersSheet.appendRow([email, familyId, 'admin']);
     
-    SS.getSheetByName('families').appendRow([familyId, 'わが家']);
-    SS.getSheetByName('children').appendRow([childId, familyId, 'お子さま', '']);
+    getSS_().getSheetByName('families').appendRow([familyId, 'わが家']);
+    getSS_().getSheetByName('children').appendRow([childId, familyId, 'お子さま', '']);
     
     // デフォルト設定
-    const settingsSheet = SS.getSheetByName('settings');
+    const settingsSheet = getSS_().getSheetByName('settings');
     const defaults = [
       [familyId, 'feed_interval_hours', '3'],
       [familyId, 'sleep_interval_hours', '2'],
@@ -1177,7 +1202,7 @@ function addFamilyMember_(params) {
   const emailToAdd = String(params.email).trim().toLowerCase();
   if (!familyId || !emailToAdd) return { error: 'invalid_params' };
   
-  const sheet = SS.getSheetByName('users');
+  const sheet = getSS_().getSheetByName('users');
   const rows = sheet.getDataRange().getValues();
   for (let i = 1; i < rows.length; i++) {
     if (String(rows[i][0]).toLowerCase() === emailToAdd) {
@@ -1204,7 +1229,7 @@ function removeFamilyMember_(params) {
     return { error: 'cannot_remove_self', message: '自分自身を家族から外すことはできません。' };
   }
   
-  const sheet = SS.getSheetByName('users');
+  const sheet = getSS_().getSheetByName('users');
   const rows = sheet.getDataRange().getValues();
   for (let i = rows.length - 1; i >= 1; i--) {
     if (String(rows[i][0]).toLowerCase() === emailToRemove) {
@@ -1215,10 +1240,10 @@ function removeFamilyMember_(params) {
       sheet.getRange(i + 1, 2).setValue(newFamilyId);
       sheet.getRange(i + 1, 3).setValue('admin');
       
-      SS.getSheetByName('families').appendRow([newFamilyId, 'わが家']);
-      SS.getSheetByName('children').appendRow([newChildId, newFamilyId, 'お子さま', '']);
+      getSS_().getSheetByName('families').appendRow([newFamilyId, 'わが家']);
+      getSS_().getSheetByName('children').appendRow([newChildId, newFamilyId, 'お子さま', '']);
       
-      const settingsSheet = SS.getSheetByName('settings');
+      const settingsSheet = getSS_().getSheetByName('settings');
       const defaults = [
         [newFamilyId, 'feed_interval_hours', '3'],
         [newFamilyId, 'sleep_interval_hours', '2'],
@@ -1239,7 +1264,7 @@ function updateFamily_(params) {
   const name = params.name;
   if (!familyId || !name) return { error: 'invalid_params' };
   
-  const sheet = SS.getSheetByName('families');
+  const sheet = getSS_().getSheetByName('families');
   const rows = sheet.getDataRange().getValues();
   for (let i = 1; i < rows.length; i++) {
     if (rows[i][0] === familyId) {
@@ -1259,7 +1284,7 @@ function deleteFamily_(params) {
   }
   
   // 家族データを削除
-  const fSheet = SS.getSheetByName('families');
+  const fSheet = getSS_().getSheetByName('families');
   const fRows = fSheet.getDataRange().getValues();
   for (let i = fRows.length - 1; i >= 1; i--) {
     if (fRows[i][0] === familyId) {
@@ -1268,7 +1293,7 @@ function deleteFamily_(params) {
   }
   
   // 関連する子供も削除
-  const cSheet = SS.getSheetByName('children');
+  const cSheet = getSS_().getSheetByName('children');
   const cRows = cSheet.getDataRange().getValues();
   for (let i = cRows.length - 1; i >= 1; i--) {
     if (cRows[i][1] === familyId) {
@@ -1277,7 +1302,7 @@ function deleteFamily_(params) {
   }
   
   // ユーザーの所属家族をリセット（デフォルト家族へ移動）
-  const uSheet = SS.getSheetByName('users');
+  const uSheet = getSS_().getSheetByName('users');
   const uRows = uSheet.getDataRange().getValues();
   for (let i = 1; i < uRows.length; i++) {
     if (uRows[i][1] === familyId) {
@@ -1298,7 +1323,7 @@ function updateChild_(params) {
   const email = params && params.email;
   const myFamilyId = getUserFamilyId_(email);
   
-  const sheet = SS.getSheetByName('children');
+  const sheet = getSS_().getSheetByName('children');
   const rows = sheet.getDataRange().getValues();
   for (let i = 1; i < rows.length; i++) {
     if (rows[i][0] === childId) {
@@ -1320,7 +1345,7 @@ function deleteChild_(params) {
   const email = params && params.email;
   const myFamilyId = getUserFamilyId_(email);
   
-  const sheet = SS.getSheetByName('children');
+  const sheet = getSS_().getSheetByName('children');
   const rows = sheet.getDataRange().getValues();
   for (let i = rows.length - 1; i >= 1; i--) {
     if (rows[i][0] === childId) {
@@ -1383,5 +1408,32 @@ function getInitialData_(params) {
   } catch (e) {
     logError_(e, 'getInitialData_');
     return { error: e.message };
+  }
+}
+
+// =========================================
+// 住所から緯度経度を取得 (Google Maps Geocoder)
+// =========================================
+function geocodeAddress_(params) {
+  try {
+    const address = params.address || '';
+    if (!address) {
+      return { error: 'address_required', message: '住所が入力されていません。' };
+    }
+    const geocoder = Maps.newGeocoder();
+    const response = geocoder.geocode(address);
+    
+    if (response.status === 'OK' && response.results.length > 0) {
+      const location = response.results[0].geometry.location;
+      return {
+        lat: location.lat,
+        lng: location.lng
+      };
+    } else {
+      return { error: 'geocode_failed', message: '住所から位置情報を取得できませんでした。' };
+    }
+  } catch (e) {
+    if (typeof logError_ === 'function') logError_(e, 'geocodeAddress_');
+    return { error: 'geocode_error', message: String(e) };
   }
 }

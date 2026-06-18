@@ -400,3 +400,18 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
   3. **index.html**: お出かけタブの `useEffect([activeTab])` に `facilities.length > 0` チェックを追加。施設データが既にある場合（localStorage 24時間キャッシュ含む）は Overpass API を再実行しない。
   4. **index.html**: ヘッダーの family/child セレクトで「読み込み中...」の固定表示を改善。現在保持しているIDを表示するよう変更。
   5. `clasp push` および上書きデプロイをバージョン `@44` として実行。GitHub Pages (`kaz31wrk.github.io/ChildCompass`) にも git push。
+
+### 2026-06-19 (システム改修・最適化作業指示書に基づく改修)
+
+- **目的**:
+  1. バックエンド（Code.js）の堅牢化。グローバル変数 SS の廃止と、書き込み時の排他制御（LockService）の導入、未実装の `geocodeAddress_` 追加。
+  2. フロントエンド（index.html）の「お出かけマップ」の動的埋め込み対応と、フォーム部品のモバイルUI調整。
+- **対応**:
+  1. `Code.js` 内の `const SS = SpreadsheetApp.getActiveSpreadsheet();` を廃止し、セーフゲッター `getSS_()` に置換。
+  2. `Code.js` の `handleAction` を書き換え、書き込みを伴うアクション（`addLog_`, `addGrowth_`, `saveSettings_` 等15個）に `LockService.getScriptLock()` による排他制御（最大10秒待ち、`try-finally` での解放）を導入。
+  3. `Code.js` 末尾に GAS の `Maps.newGeocoder()` を使用した `geocodeAddress_` 関数を追加し、住所からの緯度経度変換機能を提供。
+  4. `index.html` に `selectedFacility` ステートを追加し、`FacilityMap` コンポーネントがこれを受け取るよう修正。
+  5. 施設リストの「地図で表示 📍」ボタンのリンクを `<a>` から `onClick` の `<button>` に変更し、タップ時に `selectedFacility` を更新してページ上部にスクロールするよう実装。
+  6. `FacilityMap` 内で、`selectedFacility` がある場合はその施設名または座標を中心とした Google Maps Embed URL を動的に生成するよう改修。
+  7. `index.html` 内の `datetime-local` 入力フォーム等のクラスに `appearance-none` を追加し、モバイル Safari 等での表示はみ出しを防止。
+  8. `clasp push` および指定のデプロイIDへの上書きデプロイを実行。

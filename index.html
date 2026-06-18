@@ -473,18 +473,7 @@
         // ============================================================
         // Leaflet Map Component
         // ============================================================
-        const FacilityMap = ({ facilities, userLocation, onRequestGPS, gpsLoading }) => {
-            // Google Maps Embed URL を生成（無料・APIキー不要）
-            const buildEmbedUrl = () => {
-                if (!userLocation) {
-                    // 現在地未取得: デフォルト表示（東京）
-                    return 'https://www.google.com/maps/embed?pb=!1m14!1m12!1m3!1d12965.15!2d139.6503!3d35.6762!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!5e0!3m2!1sja!2sjp!4v1';
-                }
-                // 現在地中心の地図（公式 Embed API のq=lat,lng 形式）
-                const { lat, lng } = userLocation;
-                return `https://www.google.com/maps/embed/v1/place?key=AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY&q=${lat},${lng}&zoom=15&language=ja`;
-            };
-
+        const FacilityMap = ({ facilities, userLocation, selectedFacility, onRequestGPS, gpsLoading }) => {
             // 現在地周辺 "子連れ施設" のGoogle Maps検索URL（施設全体を一気に開く）
             const buildNearbySearchUrl = () => {
                 if (!userLocation) return null;
@@ -492,12 +481,18 @@
                 return `https://www.google.com/maps/search/公園+児童館+授乳室/@${lat},${lng},15z`;
             };
 
-            // fallback: 現在地が取れていない場合はシンプルな地図URL
-            const embedUrl = userLocation
-                ? `https://maps.google.com/maps?q=${userLocation.lat},${userLocation.lng}&z=15&output=embed&hl=ja`
-                : `https://maps.google.com/maps?q=35.6762,139.6503&z=13&output=embed&hl=ja`;
-
             const nearbySearchUrl = buildNearbySearchUrl();
+
+            // Google Maps Embed URL (q パラメータに施設名や座標を渡す)
+            let embedUrl = `https://maps.google.com/maps?q=35.6762,139.6503&z=13&output=embed&hl=ja`;
+            if (selectedFacility) {
+                const lat = selectedFacility.lat;
+                const lng = selectedFacility.lon || selectedFacility.lng;
+                const query = encodeURIComponent(selectedFacility.name || `${lat},${lng}`);
+                embedUrl = `https://maps.google.com/maps?q=${query}&ll=${lat},${lng}&z=16&output=embed&hl=ja`;
+            } else if (userLocation) {
+                embedUrl = `https://maps.google.com/maps?q=${userLocation.lat},${userLocation.lng}&z=15&output=embed&hl=ja`;
+            }
 
             return (
                 <div className="relative rounded-2xl overflow-hidden border border-slate-200 shadow-md">
@@ -771,6 +766,8 @@
             // 編集用の一時ステート
             const [editingFamilyId, setEditingFamilyId] = React.useState(null);
             const [editingFamilyName, setEditingFamilyName] = React.useState('');
+            const [userLocation, setUserLocation] = React.useState(null);
+            const [selectedFacility, setSelectedFacility] = React.useState(null);
             const [editingChildId, setEditingChildId] = React.useState(null);
             const [editingChildName, setEditingChildName] = React.useState('');
             const [editingChildBirth, setEditingChildBirth] = React.useState('');
@@ -2365,9 +2362,9 @@ out center 20;`;
                                                                         <Icon.Phone />
                                                                     </button>
                                                                 )}
-                                                                <a href={mapsUrl} target="_blank" className="p-2 bg-green-50 hover:bg-green-100 text-green-600 rounded-xl transition-colors border border-green-100">
+                                                                <button onClick={(e) => { e.preventDefault(); setSelectedFacility(f); window.scrollTo({top:0, behavior:'smooth'}); }} className="p-2 bg-green-50 hover:bg-green-100 text-green-600 rounded-xl transition-colors border border-green-100">
                                                                     <Icon.Loc />
-                                                                </a>
+                                                                </button>
                                                             </div>
                                                         </div>
                                                         <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5 space-y-1.5">
@@ -2413,6 +2410,7 @@ out center 20;`;
                                     <FacilityMap
                                         facilities={displayFacilities.filter(f => facFilter === 'all' || f.type === facFilter)}
                                         userLocation={userLocation}
+                                        selectedFacility={selectedFacility}
                                         onRequestGPS={handleRequestGPS}
                                         gpsLoading={gpsLoading}
                                     />
@@ -2431,7 +2429,7 @@ out center 20;`;
                                             <div>
                                                 <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">測定日時</label>
                                                 <input type="datetime-local" value={growthTimestamp} onChange={e => setGrowthTimestamp(e.target.value)}
-                                                    className="w-full max-w-full box-border bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                                                    className="w-full max-w-full box-border appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                 <button type="button" onClick={() => setGrowthTimestamp(toDatetimeLocalValue())}
                                                     className="mt-1 text-[10px] text-indigo-600 font-semibold">今の時刻に戻す</button>
                                             </div>
