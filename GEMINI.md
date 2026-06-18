@@ -10,6 +10,7 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
 
 ## 注意事項・ルール
 
+- **テストルール（必須）**: コードの変更とデプロイを行った後は、必ず `browser_subagent` または手動で実機テストを行い、構文エラー（白画面）等が発生していないか動作確認を行ってください。
 - クライアント側のスクリプトは `Index.html` 内の `<script type="text/babel">` 内に実装され、ブラウザ上の Babel Standalone でトランスパイルされます。
 - ファイルが不完全な状態（途中で切れるなど）になると、Babel Standalone のトランスパイルエラーにより、ブラウザ上で `Failed to execute 'appendChild' on 'Node': Cannot use import statement outside a module` などの致命的なエラーが発生し、画面全体が真っ白になります。
 - 編集時には必ずファイルの完全性を損なわないように注意してください。

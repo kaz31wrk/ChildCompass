@@ -766,8 +766,6 @@
             // 編集用の一時ステート
             const [editingFamilyId, setEditingFamilyId] = React.useState(null);
             const [editingFamilyName, setEditingFamilyName] = React.useState('');
-            const [userLocation, setUserLocation] = React.useState(null);
-            const [selectedFacility, setSelectedFacility] = React.useState(null);
             const [editingChildId, setEditingChildId] = React.useState(null);
             const [editingChildName, setEditingChildName] = React.useState('');
             const [editingChildBirth, setEditingChildBirth] = React.useState('');
@@ -828,6 +826,7 @@
             const [searchQuery, setSearchQuery] = React.useState('');
             const [facFilter, setFacFilter] = React.useState('all');
             const [userLocation, setUserLocation] = React.useState(null);
+            const [selectedFacility, setSelectedFacility] = React.useState(null);
             const [gpsLoading, setGpsLoading] = React.useState(false);
             const [gpsError, setGpsError] = React.useState(false);
             const [addressInput, setAddressInput] = React.useState('');
