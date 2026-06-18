@@ -13,26 +13,44 @@ function doGet(e) {
   try {
     initSpreadsheet();
     const action = e.parameter.action;
-    if (action === 'getLogs') return json(getLogsFiltered(e.parameter));
-    if (action === 'getFacilities') return json(searchNearbyFacilities_(e.parameter));
-    if (action === 'getMilestones') return json(getMilestonesFiltered(e.parameter));
+    
+    if (!action) {
+      // アクションなし = HTMLを返す（GASのWebアプリとして動作）
+      return HtmlService.createTemplateFromFile('index')
+        .evaluate()
+        .setTitle('ChildCompass')
+        .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+    }
+    
+    // paramsパラメータがあればJSON解析して使用（フロントエンドのfetch GETから）
+    let params = e.parameter;
+    if (e.parameter.params) {
+      try {
+        const parsed = JSON.parse(e.parameter.params);
+        params = Object.assign({}, e.parameter, parsed);
+      } catch (ex) { /* ignore parse error, use e.parameter as-is */ }
+    }
+    
+    // 読み取り専用のGETアクション（後方互換）
+    if (action === 'getLogs') return json(getLogsFiltered(params));
+    if (action === 'getFacilities') return json(searchNearbyFacilities_(params));
+    if (action === 'getMilestones') return json(getMilestonesFiltered(params));
     if (action === 'getFamilies') return json(getData('families'));
-    if (action === 'getChildren') return json(getChildrenFiltered(e.parameter));
-    if (action === 'getSettings') return json(getSettingsMap(e.parameter.familyId || DEFAULT_FAMILY_ID));
-    if (action === 'getSuggestions') return json(getLogSuggestions(e.parameter));
-    if (action === 'getGrowth') return json(getGrowthFiltered(e.parameter));
-    if (action === 'getNearbyPlaces') return json(getNearbyPlaces_(e.parameter));
+    if (action === 'getChildren') return json(getChildrenFiltered(params));
+    if (action === 'getSettings') return json(getSettingsMap(params.familyId || DEFAULT_FAMILY_ID));
+    if (action === 'getSuggestions') return json(getLogSuggestions(params));
+    if (action === 'getGrowth') return json(getGrowthFiltered(params));
+    if (action === 'getNearbyPlaces') return json(getNearbyPlaces_(params));
     if (action === 'getErrors') return json(getData('errors'));
-
-    return HtmlService.createTemplateFromFile('index')
-      .evaluate()
-      .setTitle('ChildCompass')
-      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+    
+    // それ以外のアクションは handleAction で統一処理（書き込み系も含む）
+    return json(handleAction(action, params));
   } catch (err) {
     logError_(err, "doGet: " + (e ? JSON.stringify(e.parameter) : ''));
     return HtmlService.createHtmlOutput("システムエラーが発生しました。スプレッドシートの 'errors' シートをご確認ください。<br>" + err.message);
   }
 }
+
 
 function doPost(e) {
   try {

@@ -381,3 +381,22 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
      - どのブラウザ環境でも確実に 10〜12 秒でタイムアウトする `fetchWithTimeout` ヘルパーを自前実装し、Overpass API の Race 方式および逐次フォールバック処理に適用して無限フリーズを解決。
   5. **デプロイ**:
      - `clasp push` および上書きデプロイを実行（バージョン `@42`）。
+
+### 2026-06-18 (Family/Child読み込み高速化とお出かけタブのキャッシュ改善)
+
+- **課題**:
+  1. Family と Child の読み込みが遅すぎる。アプリ起動後、ヘッダーのセレクトボックスに家族名・子供名が表示されるまでに数秒〜10秒以上かかっていた。
+  2. お出かけタブを開くたびに毎回 Overpass API の3並列クエリ（最大30秒）が走り、タブが使い物にならなかった。
+
+- **根本原因分析**:
+  - 従来の `loadAllData` は `getOrCheckUser` (認証) に続き `getLogs`, `getMilestones`, `getFamilies`, `getChildren`, `getSettings`, `getGrowth` の6つを並列呼び出し（1往復 = 約3〜8秒）し、さらにその後 `getFamilyMembers` と `getSuggestions` を直列で呼ぶ計8往復構成だった。
+  - お出かけタブの `useEffect([activeTab])` は、タブを開くたびに無条件で Overpass API を再実行していた（localStorage 24時間キャッシュがあってもしなくても）。
+
+- **対応**:
+  1. **Code.js**: `getInitialData_` 関数を新規追加。`getOrCheckUser_` + `getFamiliesFiltered_` + `getChildrenFiltered` + `getSettingsMap` + `getFamilyMembers_` をまとめて1回のGAS呼び出しで返す。`handleAction` に `getInitialData` ケースを追加。
+  2. **index.html**: `loadAllData` を2段階ロードに改修:
+     - **Phase1**: `getInitialData` 1回の呼び出しで認証+家族+子供+設定+メンバーを取得 → 即座にUI（ヘッダーセレクト等）に反映。これにより家族/子供表示が劇的に速くなった。
+     - **Phase2**: Phase1完了後、`logs`・`milestones`・`growthData`・`suggestions` を `.then()` でバックグラウンド非同期取得（awaitしない）。
+  3. **index.html**: お出かけタブの `useEffect([activeTab])` に `facilities.length > 0` チェックを追加。施設データが既にある場合（localStorage 24時間キャッシュ含む）は Overpass API を再実行しない。
+  4. **index.html**: ヘッダーの family/child セレクトで「読み込み中...」の固定表示を改善。現在保持しているIDを表示するよう変更。
+  5. `clasp push` および上書きデプロイをバージョン `@44` として実行。GitHub Pages (`kaz31wrk.github.io/ChildCompass`) にも git push。

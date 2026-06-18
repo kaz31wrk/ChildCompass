@@ -162,15 +162,25 @@
             const isLocalMock = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !GAS_URL;
             if (!isLocalMock) {
                 try {
-                    // CORSプリフライトを回避するため、単純なPOSTリクエスト（JSON文字列をそのまま送信）
-                    const response = await fetch(GAS_URL, {
-                        method: 'POST',
-                        body: JSON.stringify({ action: actionName, ...params })
+                    // GASのWebアプリはPOSTに302リダイレクトを返してGETに変換されるため
+                    // 最初からGETのURLパラメータ方式で送信する（doGetで処理される）
+                    const urlParams = new URLSearchParams({
+                        action: actionName,
+                        params: JSON.stringify(params)
+                    });
+                    const response = await fetch(`${GAS_URL}?${urlParams.toString()}`, {
+                        method: 'GET',
+                        redirect: 'follow'
                     });
                     if (response.ok) {
-                        const res = await response.json();
-                        if (res && res.error) throw new Error(res.error);
-                        return res;
+                        const text = await response.text();
+                        try {
+                            const res = JSON.parse(text);
+                            if (res && res.error) throw new Error(res.error);
+                            return res;
+                        } catch (jsonErr) {
+                            throw new Error('GAS API returned non-JSON: ' + text.substring(0, 200));
+                        }
                     }
                     throw new Error(`GAS API HTTP error: ${response.status}`);
                 } catch (err) {
@@ -704,23 +714,48 @@
 
             // Google Identity Services初期化とログインボタン描画の監視
             React.useEffect(() => {
-                if (!userEmail && googleClientId && window.google) {
-                    try {
-                        google.accounts.id.initialize({
-                            client_id: googleClientId,
-                            callback: handleCredentialResponse,
-                            auto_select: false
-                        });
-                        google.accounts.id.renderButton(
-                            document.getElementById("google-signin-btn"),
-                            { theme: "outline", size: "large", width: 280, shape: "pill" }
-                        );
-                    } catch (err) {
-                        console.error("GIS initialization error:", err);
-                        setAuthError("Google ログインの初期化に失敗しました。クライアントIDが正しいかご確認ください。");
+                if (userEmail || !googleClientId) return;
+
+                let timer = null;
+
+                const initGis = () => {
+                    // window.google が GAS の google.script.run と衝突しないよう
+                    // google.accounts.id まで全て存在するかを厳密チェック
+                    if (
+                        typeof window.google !== 'undefined' &&
+                        window.google.accounts &&
+                        window.google.accounts.id
+                    ) {
+                        if (timer) { clearInterval(timer); timer = null; }
+                        try {
+                            google.accounts.id.initialize({
+                                client_id: googleClientId,
+                                callback: handleCredentialResponse,
+                                auto_select: false
+                            });
+                            const btnEl = document.getElementById("google-signin-btn");
+                            if (btnEl) {
+                                google.accounts.id.renderButton(btnEl, {
+                                    theme: "outline", size: "large", width: 280, shape: "pill"
+                                });
+                            }
+                        } catch (err) {
+                            console.error("GIS initialization error:", err);
+                            setAuthError("Google ログインの初期化に失敗しました。クライアントIDが正しいかご確認ください。");
+                        }
                     }
+                    // まだロードされていない場合はポーリングを継続
+                };
+
+                // 即試行し、未ロードならポーリング
+                initGis();
+                if (!(typeof window.google !== 'undefined' && window.google.accounts && window.google.accounts.id)) {
+                    timer = setInterval(initGis, 500);
                 }
+
+                return () => { if (timer) clearInterval(timer); };
             }, [googleClientId, userEmail]);
+
             const [familyMembers, setFamilyMembers] = React.useState([]);
             const [newMemberEmail, setNewMemberEmail] = React.useState('');
             const [memberLoading, setMemberLoading] = React.useState(false);
