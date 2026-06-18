@@ -1709,7 +1709,7 @@ out center 20;`;
                             </div>
                             <div className="flex items-center space-x-1">
                                 <button onClick={() => setShowSettings(true)} className="px-2 py-1 text-[10px] font-bold text-indigo-600 bg-indigo-50 rounded-lg border border-indigo-100">設定</button>
-                                <button onClick={loadAllData} className="p-2 text-slate-400 hover:text-indigo-600 rounded-xl hover:bg-slate-50">
+                                <button onClick={() => loadAllData()} className="p-2 text-slate-400 hover:text-indigo-600 rounded-xl hover:bg-slate-50">
                                     <Icon.Refresh />
                                 </button>
                             </div>
