@@ -90,6 +90,8 @@
 // GAS通信ラッパー
 // ============================================================
 const GAS_URL = "https://script.google.com/macros/s/AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw/exec";
+// Google ログイン用のクライアント ID（作成したクライアントIDをここに貼り付けてください）
+const GOOGLE_CLIENT_ID = "";
 
 const runGas = async (actionName, params = {}) => {
     // ログイン中のメールアドレスがあれば自動的にパラメータへマージ
@@ -604,7 +606,7 @@ const App = () => {
     const [milestoneAiLoading, setMilestoneAiLoading] = React.useState(false);
 
     // Google認証・家族連携用ステート
-    const [googleClientId, setGoogleClientId] = React.useState(localStorage.getItem('google_client_id') || '');
+    const [googleClientId, setGoogleClientId] = React.useState(GOOGLE_CLIENT_ID || localStorage.getItem('google_client_id') || '');
     const [userEmail, setUserEmail] = React.useState(localStorage.getItem('user_email') || '');
     const [authError, setAuthError] = React.useState(null);
 
@@ -1475,52 +1477,24 @@ out center 20;`;
                     )}
 
                     {!googleClientId ? (
-                        <div className="bg-amber-50/50 border border-amber-100 rounded-2xl p-4 text-left space-y-3">
+                        <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 text-left space-y-2">
                             <div className="flex items-center space-x-1.5 text-amber-800">
                                 <span className="text-base">⚙️</span>
-                                <h3 className="text-xs font-bold">OAuth クライアント ID の設定 (初回のみ)</h3>
+                                <h3 className="text-xs font-bold">ログイン準備中</h3>
                             </div>
                             <p className="text-[11px] text-amber-700 leading-relaxed">
-                                このアプリは GitHub Pages から動作しているため、Googleログインを行うには OAuth クライアント ID を設定する必要があります。
+                                アプリケーションの初期設定を行っています。しばらくお待ちいただくか、管理者へお問い合わせください。
                             </p>
-                            <form onSubmit={(e) => {
-                                e.preventDefault();
-                                const val = e.target.clientIdInput.value.trim();
-                                if (val) {
-                                    setGoogleClientId(val);
-                                    localStorage.setItem('google_client_id', val);
-                                }
-                            }} className="space-y-2">
-                                <input 
-                                    name="clientIdInput"
-                                    type="text" 
-                                    placeholder="Google OAuth クライアント ID を入力" 
-                                    className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                />
-                                <button type="submit" className="w-full py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl shadow hover:bg-indigo-700 transition active:scale-95">
-                                    設定を保存して進む
-                                </button>
-                            </form>
-                            <div className="text-[10px] text-slate-400 leading-relaxed">
-                                <span className="font-bold">取得方法: </span> 
-                                Google Cloud Console でプロジェクトを作成し、「ウェブ アプリケーション」のクライアントIDを生成してください。承認済みの JavaScript 生成元に <code>https://kaz31wrk.github.io</code> を追加します。
-                            </div>
+                            <p className="text-[10px] text-slate-400 border-t border-amber-200/50 pt-2 leading-relaxed">
+                                <strong>開発者の方へ:</strong> <code>index.html</code> の上部にある <code>GOOGLE_CLIENT_ID</code> 定数に、Google Cloud Console で作成した「ウェブ アプリケーション」のクライアント ID を設定してください。
+                            </p>
                         </div>
                     ) : (
                         <div className="flex flex-col items-center space-y-4">
+                            <p className="text-sm text-slate-600 font-semibold">Google アカウントでログインしてはじめる</p>
                             <div className="flex justify-center my-2">
                                 <div id="google-signin-btn"></div>
                             </div>
-                            
-                            <button 
-                                onClick={() => {
-                                    setGoogleClientId('');
-                                    localStorage.removeItem('google_client_id');
-                                }}
-                                className="text-xs text-indigo-600 hover:text-indigo-800 underline transition"
-                            >
-                                クライアント ID を変更する
-                            </button>
                         </div>
                     )}
 
@@ -1739,28 +1713,15 @@ out center 20;`;
                                 </div>
                             </div>
 
-                            {/* Google認証設定（OAuthクライアントID変更 / ログアウト） */}
+                            {/* Google認証設定（ログアウト） */}
                             <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
                                 <label className="text-[10px] font-bold text-slate-400 uppercase block">Google認証設定</label>
-                                <div>
-                                    <label className="text-[10px] font-bold text-slate-400">Google OAuth クライアント ID</label>
-                                    <input 
-                                        type="text" 
-                                        value={googleClientId} 
-                                        onChange={e => {
-                                            const val = e.target.value.trim();
-                                            setGoogleClientId(val);
-                                            if (val) {
-                                                localStorage.setItem('google_client_id', val);
-                                            } else {
-                                                localStorage.removeItem('google_client_id');
-                                            }
-                                        }}
-                                        placeholder="OAuth クライアント ID を入力"
-                                        className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" 
-                                    />
-                                </div>
-                                <div className="border-t pt-2.5">
+                                {googleClientId && (
+                                    <div className="text-[10px] text-slate-400 truncate">
+                                        設定中のクライアントID: {googleClientId.substring(0, 15)}...
+                                    </div>
+                                )}
+                                <div className="pt-1">
                                     <button 
                                         type="button" 
                                         onClick={() => {
