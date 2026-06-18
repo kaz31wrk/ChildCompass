@@ -1071,39 +1071,64 @@ out center 20;`;
                 const isLocalMock = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !GAS_URL;
 
                 if (!activeEmail && !isLocalMock) {
-                    // 未ログインかつモック環境ではない場合は何もしない（ログイン画面を表示）
                     return;
                 }
 
                 try {
+                    // ── Phase 1: 認証 + 家族 + 子供 + 設定を1回で取得（超高速）──
                     let activeFamilyId = targetFamilyId || familyId;
                     let activeChildId = childId;
 
-                    // GAS側のユーザーレコード作成/確認および家族ID取得
                     if (activeEmail) {
                         try {
-                            const auth = await runGas('getOrCheckUser', { email: activeEmail });
-                            if (auth.error) {
-                                setAuthError(auth.message || '認証エラーが発生しました。');
+                            const init = await runGas('getInitialData', { email: activeEmail });
+                            if (init.error) {
+                                setAuthError(init.message || '認証エラーが発生しました。');
                                 return;
                             }
-                            setUserEmail(auth.email);
-                            localStorage.setItem('user_email', auth.email);
+                            // 認証情報をステートに反映（即座にUIに表示される）
+                            setUserEmail(init.email);
+                            localStorage.setItem('user_email', init.email);
 
                             if (!targetFamilyId || activeFamilyId === 'fam_default') {
-                                activeFamilyId = auth.familyId;
-                                activeChildId = auth.childId;
-                                setFamilyId(auth.familyId);
-                                setChildId(auth.childId);
-                                localStorage.setItem('active_family_id', auth.familyId);
-                                localStorage.setItem('active_child_id', auth.childId || '');
+                                activeFamilyId = init.familyId;
+                                activeChildId = init.childId;
+                                setFamilyId(init.familyId);
+                                setChildId(init.childId);
+                                localStorage.setItem('active_family_id', init.familyId);
+                                localStorage.setItem('active_child_id', init.childId || '');
+                            }
+
+                            // Phase1で取得した家族・子供・設定・メンバーをすぐ反映
+                            setFamilies(init.families || []);
+                            setChildren(init.children || []);
+                            setFamilyMembers(init.familyMembers || []);
+                            if (init.settings) {
+                                setSettingsForm({
+                                    feed_interval_hours: parseFloat(init.settings.feed_interval_hours) || 3,
+                                    sleep_interval_hours: parseFloat(init.settings.sleep_interval_hours) || 2,
+                                    suggest_mode: init.settings.suggest_mode || 'average'
+                                });
+                            }
+
+                            // 子供の整合性確認
+                            if (init.children && init.children.length > 0) {
+                                const stillExists = init.children.find(x => x.id === activeChildId);
+                                if (!stillExists) {
+                                    activeChildId = init.children[0].id;
+                                    setChildId(activeChildId);
+                                    localStorage.setItem('active_child_id', activeChildId);
+                                }
+                            } else {
+                                setChildId('');
+                                localStorage.setItem('active_child_id', '');
                             }
                         } catch (e) {
-                            console.warn("Auth check failed, using mock/fallback for dev environment:", e.message);
+                            console.warn('getInitialData failed, falling back to mock:', e.message);
                             if (isLocalMock) {
                                 setUserEmail('mock-parent@gmail.com');
                             } else {
-                                setAuthError('GASサーバーのユーザー認証に失敗しました。');
+                                setAuthError('GASサーバーへの接続に失敗しました。');
                                 return;
                             }
                         }
@@ -1111,55 +1136,29 @@ out center 20;`;
                         setUserEmail('mock-parent@gmail.com');
                     }
 
+                    // ── Phase 2: ログ・マイルストーン・成長・サジェストをバックグラウンドで取得 ──
                     const c = { familyId: activeFamilyId, childId: activeChildId };
-                    const [l, m, fam, ch, sett, g] = await Promise.all([
+                    Promise.all([
                         runGas('getLogs', c),
                         runGas('getMilestones', c),
-                        runGas('getFamilies'),
-                        runGas('getChildren', { familyId: activeFamilyId }),
-                        runGas('getSettings', { familyId: activeFamilyId }),
                         runGas('getGrowth', c)
-                    ]);
-                    setLogs(l || []);
-                    setMilestones(m || []);
-                    setFamilies(fam || []);
-                    setChildren(ch || []);
-                    setGrowthData(g || []);
-                    if (ch && ch.length) {
-                        const still = ch.find(x => x.id === activeChildId);
-                        if (!still) {
-                            setChildId(ch[0].id);
-                            localStorage.setItem('active_child_id', ch[0].id);
-                        } else {
-                            localStorage.setItem('active_child_id', activeChildId);
-                        }
-                    } else {
-                        setChildId('');
-                        localStorage.setItem('active_child_id', '');
-                    }
-                    if (sett) setSettingsForm({
-                        feed_interval_hours: parseFloat(sett.feed_interval_hours) || 3,
-                        sleep_interval_hours: parseFloat(sett.sleep_interval_hours) || 2,
-                        suggest_mode: sett.suggest_mode || 'average'
-                    });
+                    ]).then(([l, m, g]) => {
+                        setLogs(l || []);
+                        setMilestones(m || []);
+                        setGrowthData(g || []);
+                    }).catch(e => console.error('Phase2 data load error:', e));
 
-                    // 家族共有メンバーのロード
-                    if (activeFamilyId) {
-                        const list = await runGas('getFamilyMembers', { familyId: activeFamilyId });
-                        setFamilyMembers(list || []);
-                    }
-
-                    // サジェストのロード
-                    try {
-                        const s = await runGas('getSuggestions', { familyId: activeFamilyId, childId: activeChildId });
+                    runGas('getSuggestions', c).then(s => {
+                        if (!s) return;
                         setSuggestions(s);
                         if (s.milkMl && s.milkMl.length) setMilkMl(s.milkMl[0]);
                         if (s.sleepMin && s.sleepMin.length) setSleepMin(s.sleepMin[0]);
-                    } catch (e) { console.error(e); }
+                    }).catch(e => console.error('Suggestions load error:', e));
 
                     if (userLocation) await loadNearbyFacilities(userLocation.lat, userLocation.lng);
                 } catch (err) { console.error(err); }
             };
+
 
             // ─── 家族メンバー連携ハンドラー ───
             const handleAddMember = async () => {
@@ -1508,10 +1507,18 @@ out center 20;`;
             }, [facFilter]);
 
             React.useEffect(() => {
+                // お出かけタブに切り替えた時の処理
+                // 施設データが既にある場合はスキップ（キャッシュ済み）
                 if (activeTab === 'facilities') {
+                    if (facilities.length > 0) {
+                        // 既にデータあり → 再取得不要
+                        return;
+                    }
                     if (!userLocation) {
+                        // 現在地未取得 → GPS取得を試みる
                         handleRequestGPS();
                     } else {
+                        // 現在地あり・データなし → 施設検索
                         loadNearbyFacilities(userLocation.lat, userLocation.lng);
                     }
                 }
@@ -1676,7 +1683,7 @@ out center 20;`;
                             }}
                                 className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-semibold">
                                 {families.length === 0 ? (
-                                    <option value={familyId}>読み込み中...</option>
+                                    <option value={familyId}>{familyId && familyId !== 'fam_default' ? familyId : 'ロード中...'}</option>
                                 ) : (
                                     families.map(f => (
                                         <option key={f.id} value={f.id}>{f.name}</option>
@@ -1690,7 +1697,7 @@ out center 20;`;
                             }}
                                 className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-semibold">
                                 {children.length === 0 ? (
-                                    <option value={childId}>読み込み中...</option>
+                                    <option value={childId}>{childId ? childId : 'ロード中...'}</option>
                                 ) : (
                                     children.map(c => (
                                         <option key={c.id} value={c.id}>{c.name}</option>

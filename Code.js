@@ -83,6 +83,7 @@ function handleAction(actionName, params) {
     case 'getSymptomPromptAndKey': return getSymptomPromptAndKey_(params);
     case 'getLogsSummaryPromptAndKey': return getLogsSummaryPromptAndKey_(params);
     case 'getOrCheckUser': return getOrCheckUser_(params);
+    case 'getInitialData': return getInitialData_(params);
     case 'getFamilyMembers': return getFamilyMembers_(params);
     case 'addFamilyMember': return addFamilyMember_(params);
     case 'removeFamilyMember': return removeFamilyMember_(params);
@@ -1327,4 +1328,42 @@ function getFamiliesFiltered_(params) {
   const myFamilyId = getUserFamilyId_(email);
   const allFamilies = getData('families');
   return allFamilies.filter(f => f.id === myFamilyId);
+}
+
+// ─── 初期データ一括取得（高速化のため認証+家族+子供+設定を1回で返す） ─────
+function getInitialData_(params) {
+  try {
+    // 1. ユーザー認証・登録
+    const authResult = getOrCheckUser_(params);
+    if (authResult.error) return authResult;
+
+    const familyId = authResult.familyId;
+    const email = authResult.email;
+
+    // 2. 家族・子供・設定を並行取得（同一呼び出し内なので実質直列だが1往復で完結）
+    const families = getFamiliesFiltered_({ email });
+    const children = getChildrenFiltered({ familyId });
+    const settings = getSettingsMap(familyId);
+    const familyMembers = getFamilyMembers_({ familyId });
+
+    // アクティブな子供IDを決定
+    let childId = authResult.childId;
+    if (!childId || !children.find(c => c.id === childId)) {
+      childId = children.length > 0 ? children[0].id : '';
+    }
+
+    return {
+      email,
+      familyId,
+      childId,
+      isNew: authResult.isNew,
+      families,
+      children,
+      settings,
+      familyMembers
+    };
+  } catch (e) {
+    logError_(e, 'getInitialData_');
+    return { error: e.message };
+  }
 }
