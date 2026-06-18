@@ -1,0 +1,22 @@
+{
+  "short_name": "ChildCompass",
+  "name": "ChildCompass - 育児支援アプリ",
+  "description": "GASとReactで育児ライフログ・AIトリアージ・成長曲線を管理する育児支援アプリケーション",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "./index.html",
+  "background_color": "#f8fafc",
+  "theme_color": "#6366f1",
+  "display": "standalone",
+  "orientation": "portrait"
+}

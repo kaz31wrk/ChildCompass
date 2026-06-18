@@ -206,3 +206,36 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
      - `doGet` で `Index`（大文字）をロードしていた処理を小文字の `index` に変更。
      - `handleAction` の switch 文に、クライアントから呼び出されていた住所変換API `geocodeAddress` ケースを追加し、`geocodeAddress_` 関数とマッピング。
   3. `clasp push` および指定デプロイIDへの上書きデプロイをバージョン `@29` として実行。
+
+### 2026-06-18 (GitHub PagesでのBabelトランスパイルエラーによる白画面バグの解消)
+
+- **現象**:
+  - GitHub PagesのURL (`https://kaz31wrk.github.io/ChildCompass/`) を開くと画面全体が真っ白になる。
+- **原因**:
+  - `<head>` タグ内に残っていた GAS テンプレート動的展開用の `const GAS_URL = "<?= ... ?>"` の script 宣言ブロックが、85行目の Babel script 内の `const GAS_URL`（本番APIの接続URL）の `const` 再宣言と競合し、JavaScript の重複宣言エラー（`Identifier 'GAS_URL' has already been declared`）を誘発。その結果、Babel Standaloneのパース・コンパイル全体が失敗しロードが停止していた。
+- **対応**:
+  - `<head>` 内の不要な `GAS_URL` スクリプトブロック（31〜33行目）を完全に削除。
+  - `clasp push` および指定デプロイIDへの上書きデプロイをバージョン `@30` として実行。あわせて GitHub リポジトリへもプッシュ。
+
+### 2026-06-18 (カスタムSVGファビコン（家のマーク）の追加)
+
+- **要望**:
+  - ブラウザタブのアイコン（favicon）を、記録ページ左上の「家のマーク」のデザインにして欲しい。
+- **対応**:
+  - `<head>` タグ内にインラインの SVG データURIを適用した `<link rel="icon" type="image/svg+xml" ...>` を追加。
+  - アイコン形状は記録タブ左上で使用されている `Icon.Home` のパス設計に基づき、アプリのテーマカラーであるインディゴ色（`#6366f1`）をストロークに指定した美しいSVGをデータURI化して埋め込み。
+  - `clasp push` および指定デプロイIDへの上書きデプロイをバージョン `@32` として実行。あわせて GitHub リポジトリへもプッシュ。
+
+### 2026-06-18 (PC/スマートフォン両対応およびPWA対応の強化)
+
+- **要望**:
+  - アプリをスマホとPCのどちらにも対応させ、スマホのホーム画面追加時にもアプリのように使えるようにしたい。
+- **対応**:
+  1. **PWA用マニフェストファイル (`manifest.json`) の新規作成**:
+     - アプリ名（`ChildCompass`）、テーマカラー（`#6366f1`）、スタンドアロン起動モード（`display: "standalone"`、画面の縦固定など）、およびアプリアイコン（192x192、512x512）のマッピングを定義。
+  2. **フロントエンド (`index.html`) のヘッダー更新**:
+     - `<link rel="manifest" href="manifest.json">` によりマニフェストファイルを紐付け。
+     - モバイル端末（iOS/Android）のホーム画面追加用アイコンとして `apple-touch-icon.png` および `favicon.png` をリンク。
+     - アプリテーマカラーを指定する `<meta name="theme-color" ...>` および iOS Safari用のウェブアプリモード有効化メタタグを追加。
+  3. `clasp push` および指定のデプロイIDへの上書きデプロイを実行。また GitHub リポジトリへもプッシュ。
+
