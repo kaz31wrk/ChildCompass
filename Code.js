@@ -77,7 +77,7 @@ function handleAction(actionName, params) {
   }
 
   const writeActions = [
-    'addLog', 'toggleMilestone', 'hideMilestone', 'addMilestone', 'saveSettings',
+    'addLog', 'updateLog', 'deleteLog', 'toggleMilestone', 'hideMilestone', 'addMilestone', 'saveSettings',
     'addFamily', 'addChild', 'addGrowth', 'getOrCheckUser', 'addFamilyMember',
     'removeFamilyMember', 'updateFamily', 'deleteFamily', 'updateChild', 'deleteChild'
   ];
@@ -85,6 +85,8 @@ function handleAction(actionName, params) {
   const execute = () => {
     switch (actionName) {
       case 'addLog': return addLog_(params);
+      case 'updateLog': return updateLog_(params);
+      case 'deleteLog': return deleteLog_(params);
       case 'toggleMilestone': return toggleMilestone_(params);
       case 'hideMilestone': return hideMilestone_(params);
       case 'addMilestone': return addMilestone_(params);
@@ -109,6 +111,8 @@ function handleAction(actionName, params) {
       case 'getGeminiPromptAndKey': return getGeminiPromptAndKey_(params);
       case 'getSymptomPromptAndKey': return getSymptomPromptAndKey_(params);
       case 'getLogsSummaryPromptAndKey': return getLogsSummaryPromptAndKey_(params);
+      case 'getLogSuggestionsPromptAndKey': return getLogSuggestionsPromptAndKey_(params);
+      case 'getOCRAnalysisPromptAndKey': return getOCRAnalysisPromptAndKey_(params);
       case 'getOrCheckUser': return getOrCheckUser_(params);
       case 'getInitialData': return getInitialData_(params);
       case 'getFamilyMembers': return getFamilyMembers_(params);
@@ -260,6 +264,38 @@ function addLog_(params) {
   return { status: 'success' };
 }
 
+function updateLog_(params) {
+  const sheet = getSS_().getSheetByName('logs');
+  const rows = sheet.getDataRange().getValues();
+  const { familyId, childId, oldTimestamp, oldType, newTimestamp, newType, newNote } = params;
+  
+  for (let i = 1; i < rows.length; i++) {
+    const rTimestamp = normalizeTimestamp(rows[i][0]);
+    if (rTimestamp === oldTimestamp && rows[i][1] === oldType && rows[i][3] === familyId && rows[i][4] === childId) {
+      const ts = newTimestamp ? normalizeTimestamp(newTimestamp) : formatNowJst();
+      sheet.getRange(i + 1, 1, 1, 5).setValues([[ts, newType, newNote || '', familyId, childId]]);
+      updateSuggestionsFromNote(familyId, newType, newNote || '');
+      return { status: 'success' };
+    }
+  }
+  return { status: 'error', message: '対象のログが見つかりませんでした。' };
+}
+
+function deleteLog_(params) {
+  const sheet = getSS_().getSheetByName('logs');
+  const rows = sheet.getDataRange().getValues();
+  const { familyId, childId, timestamp, type } = params;
+  
+  for (let i = 1; i < rows.length; i++) {
+    const rTimestamp = normalizeTimestamp(rows[i][0]);
+    if (rTimestamp === timestamp && rows[i][1] === type && rows[i][3] === familyId && rows[i][4] === childId) {
+      sheet.deleteRow(i + 1);
+      return { status: 'success' };
+    }
+  }
+  return { status: 'error', message: '対象のログが見つかりませんでした。' };
+}
+
 function normalizeTimestamp(ts) {
   if (!ts) return formatNowJst();
   const d = new Date(ts);
@@ -298,7 +334,7 @@ function updateSuggestionsFromNote(familyId, type, note) {
 
 function mergeListSetting(familyId, key, value, maxItems) {
   const current = getSettingsMap(familyId)[key] || '';
-  const list = current.split(',').map(s => s.trim()).filter(Boolean);
+  const list = String(current).split(',').map(s => s.trim()).filter(Boolean);
   const filtered = list.filter(v => v !== value);
   filtered.unshift(value);
   saveSettingValue(familyId, key, filtered.slice(0, maxItems).join(','));
@@ -331,7 +367,7 @@ function getLogSuggestions(params) {
 
   // Note: The original code had a small logic error in the loop above where it used 'sleepFromLogs' 
   // but I will keep the structure as is while ensuring it works correctly.
-  const parseList = (s) => s.split(',').map(x => parseInt(x, 10)).filter(n => !isNaN(n) && n > 0);
+  const parseList = (s) => String(s || '').split(',').map(x => parseInt(x, 10)).filter(n => !isNaN(n) && n > 0);
 
   return {
     milkMl: uniqueNums([...milkFromLogs, ...parseList(settings.milk_ml_suggestions || '')]),
@@ -391,7 +427,8 @@ function calcNextSchedule(logs, type, settings) {
   }
 
   const last = parseJstTimestamp(filtered[filtered.length - 1].timestamp);
-  const next = new Date(last.getTime() + intervalHours * 3600000);
+  const lastTime = last ? last.getTime() : Date.now();
+  const next = new Date(lastTime + intervalHours * 3600000);
   return {
     suggestedAt: Utilities.formatDate(next, "Asia/Tokyo", "yyyy/MM/dd HH:mm"),
     label: mode === 'fixed' ? '設定間隔' : (mode === 'last' ? '前回間隔' : '平均間隔'),
@@ -456,8 +493,13 @@ function addChild_(params) {
 }
 
 function getChildrenFiltered(params) {
-  const email = params && params.email;
-  const myFamilyId = getUserFamilyId_(email);
+  let myFamilyId;
+  if (params && params.familyId) {
+    myFamilyId = params.familyId;
+  } else {
+    const email = params && params.email;
+    myFamilyId = getUserFamilyId_(email);
+  }
   const children = getData('children');
   return children.filter(c => c.family_id === myFamilyId);
 }
@@ -878,7 +920,68 @@ function logError_(err, context = '') {
   }
 }
 
-// ─── 成長記録 API ─────────────────────────────────────────────
+function getLogSuggestionsPromptAndKey_(params) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) return { error: 'gemini_api_key_not_configured' };
+
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  const childId = params.childId || DEFAULT_CHILD_ID;
+  
+  const context = buildPersonalContext(familyId, childId);
+
+  const systemPrompt = `あなたは優秀な小児科医および育児サポートAIです。
+提供された【この子供に関する最新のデータ】（これまでの授乳や睡眠の履歴など）および現在の時刻に基づいて、
+「次の推奨授乳時間」と「次の推奨睡眠時間」を予測し、JSON形式で返答してください。
+
+【注意】
+- 単なる平均間隔ではなく、現在の月齢・過去の履歴・昼夜のリズムを総合的に自律判断し、現実的な時刻を提案してください。
+- 授乳が23時間後や、睡眠が96時間後といった人間の乳幼児としてあり得ない間隔は絶対に避けてください。
+- フォーマットは必ず以下のJSONのみを返してください。マークダウン等の装飾（\`\`\`jsonなど）は一切不要です。
+
+返却フォーマット:
+{
+  "nextFeed": { "suggestedAt": "yyyy/MM/dd HH:mm", "label": "提案理由(短く)" },
+  "nextSleep": { "suggestedAt": "yyyy/MM/dd HH:mm", "label": "提案理由(短く)" },
+  "milkMl": [100, 120, 140],
+  "sleepMin": [60, 90, 120]
+}
+※ milkMlとsleepMinは最近のログから抽出した候補数値配列を返してください。
+
+【この子供に関する最新のデータ】
+${context}
+`;
+
+  return { prompt: systemPrompt, key: apiKey };
+}
+
+function getOCRAnalysisPromptAndKey_(params) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  if (!apiKey) return { error: 'gemini_api_key_not_configured' };
+
+  const systemPrompt = `あなたは画像から育児の記録データを読み取る優秀なアシスタントです。
+送信された画像（哺乳瓶、体重計、時計、おむつなど）を解析し、含まれている情報を数値化してJSON形式で返してください。
+
+【注意】
+- 画像から読み取れなかった項目は null にしてください。
+- マークダウン等の装飾（\`\`\`jsonなど）は一切含めず、純粋なJSONテキストのみを返してください。
+
+返却フォーマット:
+{
+  "type": "授乳" / "睡眠" / "排泄" / "体調" / "成長" / "その他",
+  "ml": 100,            // 哺乳瓶の目盛りなどから推測される量 (数値)
+  "minutes": 60,        // 時計などから推測される時間 (数値)
+  "height": 70.5,       // 身長計などから推測される数値
+  "weight": 8.2,        // 体重計などから推測される数値
+  "head": 43.0,         // 頭囲などから推測される数値
+  "temperature": 36.8,  // 体温計などから推測される数値
+  "note": "画像から推測される補足メモ"
+}
+`;
+
+  return { prompt: systemPrompt, key: apiKey };
+}
+
+// ─── Gemini 直接呼び出しヘルパー ─────────────────────────────────────────────
 function addGrowth_(params) {
   const sheet = getSS_().getSheetByName('growth');
   const timestamp = params.timestamp ? normalizeTimestamp(params.timestamp) : formatNowJst();

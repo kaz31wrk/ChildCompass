@@ -1164,7 +1164,7 @@ out center 20;`;
                 }
             };
 
-            const loadAllData = async (targetFamilyId = null, targetEmail = null) => {
+            const loadAllData = async (targetFamilyId = null, targetEmail = null, isManualRefresh = false) => {
                 const activeEmail = targetEmail || userEmail || localStorage.getItem('user_email');
                 const isLocalMock = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || !GAS_URL;
 
@@ -1236,29 +1236,26 @@ out center 20;`;
                     }
 
                     // ── 初期ロード完了：これ以降はバックグラウンド取得としてUIのブロックを解除 ──
-                    setGlobalLoading(false);
+                    if (!isManualRefresh) setGlobalLoading(false);
 
                     // ── Phase 2: ログ・マイルストーン・成長・サジェストをバックグラウンドで取得 ──
                     const c = { familyId: activeFamilyId, childId: activeChildId };
-                    Promise.all([
-                        runGas('getLogs', c).catch(() => []),
-                        runGas('getMilestones', c).catch(() => []),
-                        runGas('getGrowth', c).catch(() => [])
-                    ]).then(([l, m, g]) => {
-                        if (l) setLogs(l);
-                        if (m) setMilestones(m);
-                        if (g) setGrowthData(g);
-                    });
-
-                    // 取得直後のステートは未反映の可能性があるため、現在の値またはデフォルトを使用
                     const mode = settingsForm?.suggest_mode || 'ai';
-                    fetchSuggestionsWithMode(mode, c).then(s => {
-                        if (s && !s.error) {
-                            setSuggestions(s);
-                            if (s.milkMl && s.milkMl.length) setMilkMl(s.milkMl[0]);
-                            if (s.sleepMin && s.sleepMin.length) setSleepMin(s.sleepMin[0]);
-                        }
-                    }).catch(e => console.error('Suggestions load error:', e));
+                    
+                    await Promise.all([
+                        runGas('getLogs', c).then(l => { if (l) setLogs(l); }).catch(() => []),
+                        runGas('getMilestones', c).then(m => { if (m) setMilestones(m); }).catch(() => []),
+                        runGas('getGrowth', c).then(g => { if (g) setGrowthData(g); }).catch(() => []),
+                        fetchSuggestionsWithMode(mode, c).then(s => {
+                            if (s && !s.error) {
+                                setSuggestions(s);
+                                if (s.milkMl && s.milkMl.length) setMilkMl(s.milkMl[0]);
+                                if (s.sleepMin && s.sleepMin.length) setSleepMin(s.sleepMin[0]);
+                            }
+                        }).catch(e => console.error('Suggestions load error:', e))
+                    ]);
+
+                    if (isManualRefresh) setGlobalLoading(false);
 
                     if (userLocation) loadNearbyFacilities(userLocation.lat, userLocation.lng);
                 } catch (err) { 
@@ -1840,7 +1837,7 @@ out center 20;`;
                             <div className="flex items-center space-x-1">
                                 {userName && <span className="text-[10px] font-bold text-slate-500 mr-2">{userName} さん</span>}
                                 <button onClick={() => setShowSettings(true)} className="px-2 py-1 text-[10px] font-bold text-indigo-600 bg-indigo-50 rounded-lg border border-indigo-100">設定</button>
-                                <button onClick={() => loadAllData()} className="p-2 text-slate-400 hover:text-indigo-600 rounded-xl hover:bg-slate-50">
+                                <button onClick={() => loadAllData(null, null, true)} className="p-2 text-slate-400 hover:text-indigo-600 rounded-xl hover:bg-slate-50">
                                     <Icon.Refresh />
                                 </button>
                             </div>
@@ -1855,7 +1852,7 @@ out center 20;`;
                             }}
                                 className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-semibold">
                                 {families.length === 0 ? (
-                                    <option value={familyId}>ロード中...</option>
+                                    <option value={familyId}>更新中...</option>
                                 ) : (
                                     families.map(f => (
                                         <option key={f.id} value={f.id}>{f.name}</option>
@@ -1869,7 +1866,7 @@ out center 20;`;
                             }}
                                 className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-semibold">
                                 {children.length === 0 ? (
-                                    <option value={childId}>ロード中...</option>
+                                    <option value={childId}>更新中...</option>
                                 ) : (
                                     children.map(c => (
                                         <option key={c.id} value={c.id}>{c.name}</option>
@@ -3114,10 +3111,10 @@ out center 20;`;
                     )}
                     {/* 更新中ローディングオーバーレイ */}
                     {globalLoading && (
-                        <div className="fixed inset-0 z-[100] bg-white/50 backdrop-blur-sm flex items-center justify-center animate-fade-in">
-                            <div className="bg-white p-6 rounded-3xl shadow-2xl border border-slate-100 flex flex-col items-center space-y-4">
-                                <div className="w-12 h-12 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
-                                <p className="text-sm font-bold text-slate-700 tracking-wider">更新中...</p>
+                        <div className="fixed inset-0 z-[100] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center animate-fade-in pointer-events-auto">
+                            <div className="bg-white/95 p-6 rounded-3xl shadow-2xl border border-slate-100 flex flex-col items-center space-y-4">
+                                <div className="w-10 h-10 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
+                                <p className="text-xs font-bold text-slate-700 tracking-wider">更新中...</p>
                             </div>
                         </div>
                     )}

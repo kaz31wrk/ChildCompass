@@ -519,3 +519,27 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
      - `handleOCRImageUpload` を実装し、アップロードされた画像を Gemini API ( `getOCRAnalysisPromptAndKey` ) に送信。返却されたJSONデータをパースして、フォーム（タイプ、量、時間、身長・体重など）に自動でステート反映する機能を構築。
   4. 変更後、`git push` によるフロントエンド（GitHub Pages）へのデプロイと、`clasp push` および上書きデプロイ（デプロイID: `AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw`）を実行して本番環境へ反映。
 
+### 2026-06-19 (フェーズ1 UI改修: 家族ID非表示とローディングUI強化)
+
+- **要望**:
+  1. 画面リロード時に家族・子供のセレクトボックスに「ロード中...」と表示されるのを改善し、家族IDなどの内部IDを表示しないようにしてほしい。
+  2. リロード実行時は、画面全体を半透明の「更新中」ポップアップで覆い、操作できないようにブロックしてほしい（フェーズ2のバックグラウンド取得中も含む）。
+- **対応**:
+  1. `index.html` 内の `familyId` および `childId` 選択プルダウンにおけるプレースホルダー文言を「ロード中...」から「更新中...」に変更。
+  2. 設定モーダル（家族一覧）内で家族名に併記されていた内部ID `({f.id})` の表示を削除し、UIをクリーン化。
+  3. `globalLoading` ステートの表示オーバーレイについて、背景をより暗い `bg-slate-900/40` とし、`pointer-events-auto` を付与して背景の操作を確実にブロックするようにCSSを調整。
+  4. 手動リロード時（`isManualRefresh === true`）には、フェーズ1（初期データ取得）完了時点ではなく、フェーズ2（ログやマイルストーンなどの詳細データ取得）の `Promise.all` 完了時まで `globalLoading` を維持し、UIブロックを延長するよう `loadAllData` メソッドのロジックを改修。
+  5. 変更後、`clasp push` および上書きデプロイ（デプロイID: `AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw`）を実行して本番環境へ反映。
+
+### 2026-06-18 (OCR機能とAI予測のUIエラー修正)
+
+- **現象**: 
+  - `Icon.Camera` が未定義であることによるReactレンダリングエラー（白画面）が発生。
+  - `loadAllData` 関数内での `settings` および `init` の未定義参照による `ReferenceError` が発生し、UIがフリーズする。
+- **原因**: 
+  - OCR機能のために追加した `Camera` アイコンコンポーネントを `Icon` オブジェクトに定義し忘れていた。
+  - `fetchSuggestionsWithMode` 呼び出し時に、定義されていない `settings` 変数と、ブロックスコープ外の `init` 変数を参照していた。
+- **対応**:
+  - `index.html` の `Icon` オブジェクトに `<svg>` で作成した `Camera` アイコンの定義を追加。
+  - `loadAllData` 内の未定義変数参照を、ローカルの `settingsForm` または `settings` ステートのオプショナルチェイニング `settingsForm?.suggest_mode` に修正。
+  - 修正を GitHub および GAS (`clasp push && clasp deploy`) へ反映。UIが正常に表示されることを確認。
