@@ -1177,29 +1177,32 @@ out center 20;`;
                         setUserEmail('mock-parent@gmail.com');
                     }
 
+                    // ── 初期ロード完了：これ以降はバックグラウンド取得としてUIのブロックを解除 ──
+                    setGlobalLoading(false);
+
                     // ── Phase 2: ログ・マイルストーン・成長・サジェストをバックグラウンドで取得 ──
                     const c = { familyId: activeFamilyId, childId: activeChildId };
-                    const [l, m, g, s] = await Promise.all([
+                    Promise.all([
                         runGas('getLogs', c).catch(() => []),
                         runGas('getMilestones', c).catch(() => []),
-                        runGas('getGrowth', c).catch(() => []),
-                        runGas('getSuggestions', c).catch(() => null)
-                    ]);
+                        runGas('getGrowth', c).catch(() => [])
+                    ]).then(([l, m, g]) => {
+                        if (l) setLogs(l);
+                        if (m) setMilestones(m);
+                        if (g) setGrowthData(g);
+                    });
 
-                    if (l) setLogs(l);
-                    if (m) setMilestones(m);
-                    if (g) setGrowthData(g);
+                    runGas('getSuggestions', c).then(s => {
+                        if (s && !s.error) {
+                            setSuggestions(s);
+                            if (s.milkMl && s.milkMl.length) setMilkMl(s.milkMl[0]);
+                            if (s.sleepMin && s.sleepMin.length) setSleepMin(s.sleepMin[0]);
+                        }
+                    }).catch(e => console.error('Suggestions load error:', e));
 
-                    if (s && !s.error) {
-                        setSuggestions(s);
-                        if (s.milkMl && s.milkMl.length) setMilkMl(s.milkMl[0]);
-                        if (s.sleepMin && s.sleepMin.length) setSleepMin(s.sleepMin[0]);
-                    }
-
-                    if (userLocation) await loadNearbyFacilities(userLocation.lat, userLocation.lng);
+                    if (userLocation) loadNearbyFacilities(userLocation.lat, userLocation.lng);
                 } catch (err) { 
                     console.error(err); 
-                } finally {
                     setGlobalLoading(false);
                 }
             };
