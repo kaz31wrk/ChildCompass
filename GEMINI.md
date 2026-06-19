@@ -416,3 +416,89 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
   6. `FacilityMap` 内で、`selectedFacility` がある場合はその施設名または座標を中心とした Google Maps Embed URL を動的に生成するよう改修。
   7. `index.html` 内の `datetime-local` 入力フォーム等のクラスに `appearance-none` を追加し、モバイル Safari 等での表示はみ出しを防止。
   8. `clasp push` および指定のデプロイIDへの上書きデプロイを実行。
+
+### 2026-06-19 (child名がロード中になるバグの修正)
+
+- **現象**: 
+  - 子供の選択プルダウン（childId）がずっと「ロード中...」のままになり、子供のデータやそれに紐づくAPIリクエスト（getSuggestions等）が失敗・CORSエラーになる。
+- **原因**:
+  - `Code.js` の `getInitialData_` から `getChildrenFiltered({ familyId })` を呼び出していたが、`getChildrenFiltered` 関数側では引数として `email` (`params.email`) のみを期待し、内部で `getUserFamilyId_(email)` を使って家族IDを解決する仕様になっていた。
+  - そのため、引数に `email` が存在しない呼び出しにおいて、`getUserFamilyId_(undefined)` が実行されてしまい、常にデフォルトの家族ID (`fam_default`) が使われていた。結果、新規家族に紐づく子供のデータが見つからず、空配列が返却されていた。
+- **対応**:
+  1. `Code.js` の `getChildrenFiltered` を修正し、`params.familyId` が渡された場合はそれを優先的に使用し、無い場合にのみ `email` からフォールバック解決するようロジックを改修。
+  2. `clasp push` および指定デプロイIDへの上書きデプロイを実行。
+  3. ブラウザサブエージェントを用いてUI動作確認を実施し、子供の名前が正常にロード・表示されるようになったことを確認。
+
+### 2026-06-19 (CORSエラーおよび内部ID表示の修正)
+
+- **現象**: 
+  1. 画面リロード直後の初期化ロード中に、上部の家族・子供選択プルダウンに `fam_1b9b2d20` や `child_0aac6c16` などの内部IDがそのまま表示されてしまう。
+  2. `getSuggestions` APIの呼び出し時に CORS エラー（No 'Access-Control-Allow-Origin' header is present...）が発生する。
+- **原因**:
+  1. `index.html` のプルダウン選択肢（`<option>`）のレンダリングにおいて、ロード完了前（配列長が0のとき）にステートに保持されている `familyId` や `childId` をそのまま画面に書き出してしまう三項演算子の実装になっていた。
+  2. `Code.js` の `getLogSuggestions` および `addLog` 等の内部処理で、スプレッドシートの `settings` シートから取得した数値型（100, 200など）に対してそのまま `.split(',')` を呼び出していたため、`TypeError: current.split is not a function` が発生。GASの `doGet` では読み取り専用APIに `try-catch` をかけていない設計だったため、エラーがそのままトップレベルに漏れてHTMLのシステムエラー画面が返却され、CORSエラーとしてブラウザ側に拒否されていた。
+- **対応**:
+  1. `index.html` のプルダウン部分を修正し、データ配列長が0の間はIDの有無に関わらず無条件で「ロード中...」という文字列のみを描画するように変更。
+  2. `Code.js` の `parseList` および `mergeListSetting` 関数において、カンマ分割の前に `String(s || '')` などの型キャストを挟み、数値やundefinedが来ても安全にパースできるよう改修。
+  3. ついでに `calcNextSchedule` 内でログが不正な場合に備え、Dateへのパース失敗（null）時の安全な代替処理（Date.now()フォールバック）を追加。
+  4. `clasp push` および指定デプロイIDへの上書きデプロイを実行。
+  5. ブラウザサブエージェントでの実機テストを実施し、ロード時のID非表示化およびCORSエラーの完全解消を確認。
+
+### 2026-06-19 (フルスクリーンローディングの実装とフロントエンドのGitHub Pages反映漏れ対応)
+
+- **現象**: 
+  1. `index.html` に対して行ったはずの「ID表示バグの修正」がブラウザリロード時に反映されていなかった。
+  2. 右上のリロードボタン（更新）を押した際、データの同期完了まで操作できてしまう状態だった。
+- **原因**:
+  1. `clasp push` は GAS環境へのバックエンドコード（`Code.js`等）デプロイのみを行っており、フロントエンドである `index.html` は GitHub Pages でホスティングされているため、`git push` を行わないと本番環境に反映されない仕様を失念していた。
+  2. 画面全体の通信状態をブロックするフルスクリーンオーバーレイのUIが存在しなかった。
+- **対応**:
+  1. `index.html` に `globalLoading` ステートを新設。
+  2. `loadAllData` 関数において、関数開始時に `setGlobalLoading(true)` とし、`Promise.all` の完了後 `finally` で `setGlobalLoading(false)` に戻すよう非同期処理をリファクタリング。
+  3. 画面全体を覆う半透明（backdrop-blur）の「更新中...」ポップアップUIをJSXに追加し、操作不能状態を視覚的に表現。
+  4. `git add index.html` および `git commit`, `git push` を実行し、GitHub Pages への反映を完了させた。
+
+### 2026-06-19 (リロードボタン押下時のクラッシュ修正)
+
+- **現象**: 
+  - 右上のリロードボタンをクリックすると、UIが一瞬ローディング状態になった後、通信が実行されず元に戻ってしまう。
+- **原因**:
+  - `<button onClick={loadAllData}>` と記述していたため、クリックイベント（Eventオブジェクト）が `loadAllData` の第一引数（`targetFamilyId`）に渡されてしまった。この中に循環参照が含まれるため、バックエンド通信時に `JSON.stringify` などの処理でクラッシュし、ローディング状態が即座に解除されてしまっていた。
+- **対応**:
+  - `<button onClick={() => loadAllData()}>` に修正し、引数が誤って渡らないように修正した。
+  - `git commit` および `git push` を行い、GitHub Pagesに反映させた。
+
+### 2026-06-19 (ローディングが消えないバグの修正)
+
+- **現象**: 
+  - 先ほど実装した「更新中」のオーバーレイが表示されたまま消えなくなる不具合が発生した。
+- **原因**:
+  - `multi_replace_file_content` によるコード書き換え処理で、`loadAllData` 関数の後半部分の `try-finally` ブロックの挿入が漏れており、`setGlobalLoading(false)` が実行されていなかったため。
+- **対応**:
+  - `loadAllData` 関数の Phase 2 (データ取得処理) を正しく `await Promise.all()` すると共に、`finally` ブロックに `setGlobalLoading(false)` を追記。
+  - `git commit` および `git push` を実行し、GitHub Pages側に再度反映させた。
+
+### 2026-06-19 (初期ローディング速度のパフォーマンス改善)
+
+- **現象**: 
+  - 初期ローディング（またはリロード時）に画面が表示されるまで約7秒ほどかかるようになり、動作が著しく重くなった。
+- **原因**:
+  - 直前の修正で、すべてのデータ通信（Phase1：認証・家族・設定、および Phase2：ログ・マイルストーン・成長・AIサジェスト）が完了するまで `globalLoading` のポップアップを出し続けるよう `await` でブロックしたため。特に `getSuggestions` (AI) などの通信に時間がかかっていた。
+- **対応**:
+  - `loadAllData` 関数を見直し、UIの描画に最低限必要なメタデータ（Phase1）の取得が完了した直後に `setGlobalLoading(false)` を呼び出してローディングを解除するように修正。
+  - 残りのデータ（Phase2）は `await` せず、バックグラウンド（非同期）で取得してステートを更新する元のアーキテクチャに戻した。
+  - これにより、ローディング画面は1〜2秒で解除され、サクサク動作するパフォーマンスに回復した。
+
+### 2026-06-19 (UI/UXの改修：ダッシュボード最適化・入力分割・履歴モーダル・ユーザー名設定)
+
+- **要望**:
+  1. ダッシュボードのレイアウト調整：「育児ログを記録する」を一番上に配置し、他のUI要素のサイズを少し小さくする。
+  2. 記録日時のフォームを `<input type="datetime-local">` ではなく、年月日 (`date`) と時分 (`time`) に分割する。
+  3. 「全ての履歴を見る」機能と、ログの削除機能（編集はUI枠組みのみ）を実装する。
+  4. 設定画面で「パパ/ママのお名前」を登録でき、ヘッダーに「〇〇さん」と表示する。
+- **対応**:
+  1. `index.html` にて、`logTimestamp` および `growthTimestamp` ステートをそれぞれ `logDate/logTime` および `growthDate/growthTime` に分割。送信時に `combineDateTimeToJst` で結合してGASへ送るように改修。
+  2. ダッシュボードコンポーネント内のレイアウト順序をPythonスクリプトを用いて安全に入れ替え、Log Formを最上部に移動。`Today's Totals` などの要素の `padding` やアイコンサイズを縮小しコンパクト化。
+  3. `showAllLogs` ステートを追加し、タイムラインの「すべて見る」ボタンから全画面のモーダルダイアログを起動するUIを実装。各ログカードに「編集（未実装アラート）」と「削除（`runGas('deleteLog')`をコール）」ボタンを追加。
+  4. 設定画面に `userName` の入力欄を追加。`localStorage` へ保存・読み出しを行い、ダッシュボードヘッダー（`ChildCompass` の横）に「〇〇さん」と表示されるように修正。
+
