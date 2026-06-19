@@ -1320,7 +1320,7 @@ out center 20;`;
                 if (!confirm(`${email} を家族連携から解除しますか？`)) return;
                 setMemberLoading(true);
                 try {
-                    const res = await runGas('removeFamilyMember', { email });
+                    const res = await runGas('removeFamilyMember', { email, familyId });
                     if (res.error) {
                         alert(res.message || '連携解除に失敗しました。');
                     } else {
@@ -1335,7 +1335,7 @@ out center 20;`;
             const handleUpdateMemberRole = async (email, newRole) => {
                 setMemberLoading(true);
                 try {
-                    const res = await runGas('updateFamilyMemberRole', { email, role: newRole, myEmail: userEmail });
+                    const res = await runGas('updateFamilyMemberRole', { email, role: newRole, myEmail: userEmail, familyId });
                     if (res.error) {
                         alert(res.message || '権限の変更に失敗しました。');
                     } else {

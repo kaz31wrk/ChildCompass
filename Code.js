@@ -66,13 +66,28 @@ function doPost(e) {
 }
 
 function handleAction(actionName, params) {
-  // セキュリティ：params.email から所属家族IDを解決し、params.familyId を強制上書き
-  const email = params && params.email;
-  if (email) {
+  // セキュリティ：実行ユーザーが要求された familyId に所属しているか検証する
+  let executionEmail = params && params.myEmail;
+  if (!executionEmail) {
+    executionEmail = Session.getActiveUser().getEmail();
+  }
+  executionEmail = String(executionEmail || '').trim().toLowerCase();
+
+  // 特定のアクション（初期認証や新規登録など）を除き、所属確認を行う
+  const bypassActions = ['getOrCheckUser', 'getInitialData'];
+  if (executionEmail && !bypassActions.includes(actionName)) {
     const users = getData('users');
-    const user = users.find(u => String(u.email).toLowerCase() === email.toLowerCase());
-    if (user) {
-      params.familyId = user.family_id;
+    const myMemberships = users.filter(u => String(u.email).trim().toLowerCase() === executionEmail);
+    const myFamilyIds = myMemberships.map(u => String(u.family_id).trim());
+
+    const requestedFamilyId = params && params.familyId;
+    if (requestedFamilyId && requestedFamilyId !== DEFAULT_FAMILY_ID) {
+      if (!myFamilyIds.includes(String(requestedFamilyId).trim())) {
+        return { error: 'security_violation', message: '指定された家族データへのアクセス権限がありません。' };
+      }
+    } else if (myFamilyIds.length > 0 && params) {
+      // 家族IDが指定されていない場合は、実行ユーザーの最初の家族IDをセット
+      params.familyId = myFamilyIds[0];
     }
   }
 
@@ -108,7 +123,10 @@ function handleAction(actionName, params) {
       case 'getNearbyPlaces': return getNearbyPlaces_(params);
       case 'geocodeAddress': return geocodeAddress_(params);
       case 'evaluateSymptomAI': return evaluateSymptomAI_(params);
-      case 'getGeminiPromptAndKey': return getGeminiPromptAndKey_(params);
+      case 'getInitialData':
+        return getInitialData_(params);
+      case 'getGeminiPromptAndKey':
+        return getGeminiPromptAndKey_(params);
       case 'getSymptomPromptAndKey': return getSymptomPromptAndKey_(params);
       case 'getLogsSummaryPromptAndKey': return getLogsSummaryPromptAndKey_(params);
       case 'getLogSuggestionsPromptAndKey': return getLogSuggestionsPromptAndKey_(params);
@@ -1335,36 +1353,35 @@ function addFamilyMember_(params) {
   const emailToAdd = String(params.email).trim().toLowerCase();
   if (!emailToAdd) return { error: 'invalid_params' };
   
-  const myEmail = params.myEmail || Session.getActiveUser().getEmail();
-  const users = getData('users');
-  const me = users.find(u => String(u.email).toLowerCase() === String(myEmail).toLowerCase());
-  
-  if (!me || !me.family_id) {
-    return { error: 'inviter_not_found', message: '招待者の家族情報が見つかりません。' };
+  const familyId = params.familyId;
+  if (!familyId) {
+    return { error: 'invalid_params', message: '家族IDが指定されていません。' };
   }
-  const familyId = me.family_id;
   
   const sheet = getSS_().getSheetByName('users');
   const rows = sheet.getDataRange().getValues();
+  
+  // すでにこの家族に登録されているかチェック
   for (let i = 1; i < rows.length; i++) {
-    if (String(rows[i][0]).toLowerCase() === emailToAdd) {
-      // すでに登録があれば家族IDを上書きして共有する
-      sheet.getRange(i + 1, 2).setValue(familyId);
-      sheet.getRange(i + 1, 3).setValue('member');
-      return { status: 'success', updated: true };
+    if (String(rows[i][0]).trim().toLowerCase() === emailToAdd && String(rows[i][1]).trim() === familyId) {
+      return { status: 'success', updated: false, message: 'すでにメンバーに登録されています。' };
     }
   }
-  // 新規登録
+  
+  // 新規に紐付け行を追加（複数家族への所属を許容）
   sheet.appendRow([emailToAdd, familyId, 'member']);
-  return { status: 'success', updated: false };
+  return { status: 'success', updated: true };
 }
 
 function updateFamilyMemberRole_(params) {
   const targetEmail = String(params.email).trim().toLowerCase();
   const newRole = params.role; // 'admin' or 'member'
-  const myEmail = params.myEmail || Session.getActiveUser().getEmail();
+  const myEmail = String(params.myEmail || Session.getActiveUser().getEmail()).trim().toLowerCase();
+  const familyId = params.familyId;
   
-  if (!targetEmail || !newRole) return { error: 'invalid_params' };
+  if (!targetEmail || !newRole || !familyId) {
+    return { error: 'invalid_params', message: 'パラメータが無効です。' };
+  }
   
   const sheet = getSS_().getSheetByName('users');
   const rows = sheet.getDataRange().getValues();
@@ -1372,51 +1389,63 @@ function updateFamilyMemberRole_(params) {
   let roleIndex = header.indexOf('role');
   if (roleIndex === -1) roleIndex = 2; // Fallback
   
-  // Find my role to check permissions
+  // 実行ユーザーがこの家族の管理者であるかチェック
   let myRole = 'member';
+  let myUserFound = false;
   for (let i = 1; i < rows.length; i++) {
-    if (String(rows[i][0]).toLowerCase() === String(myEmail).toLowerCase()) {
+    if (String(rows[i][0]).trim().toLowerCase() === myEmail && String(rows[i][1]).trim() === familyId) {
       myRole = rows[i][roleIndex];
+      myUserFound = true;
       break;
     }
   }
   
-  if (myRole !== 'admin') {
-    return { error: 'unauthorized', message: '権限を変更するには管理者である必要があります。' };
+  if (!myUserFound) {
+    return { error: 'unauthorized', message: '実行ユーザー ' + myEmail + ' が指定の家族 (' + familyId + ') に見つかりません。' };
   }
   
-  // Update target user's role
+  if (myRole !== 'admin') {
+    return { error: 'unauthorized', message: '権限を変更するには管理者である必要があります。（現在のユーザー: ' + myEmail + ', 権限: ' + myRole + '）' };
+  }
+  
+  // 指定された家族内での対象ユーザーの権限を更新
   for (let i = 1; i < rows.length; i++) {
-    if (String(rows[i][0]).toLowerCase() === targetEmail) {
+    if (String(rows[i][0]).trim().toLowerCase() === targetEmail && String(rows[i][1]).trim() === familyId) {
       sheet.getRange(i + 1, roleIndex + 1).setValue(newRole);
       return { status: 'success' };
     }
   }
-  return { error: 'not_found', message: '対象のユーザーが見つかりません。' };
+  return { error: 'not_found', message: '指定の家族内に対象のユーザー ' + targetEmail + ' が見つかりません。' };
 }
 
 function removeFamilyMember_(params) {
   const emailToRemove = String(params.email).trim().toLowerCase();
-  if (!emailToRemove) return { error: 'invalid_params' };
+  const familyId = params.familyId;
+  if (!emailToRemove || !familyId) return { error: 'invalid_params', message: 'パラメータが無効です。' };
   
   let myEmail = params.myEmail;
   if (!myEmail) {
     myEmail = Session.getActiveUser().getEmail();
   }
-  if (myEmail && myEmail.toLowerCase() === emailToRemove) {
+  myEmail = String(myEmail || '').trim().toLowerCase();
+  
+  if (myEmail === emailToRemove) {
     return { error: 'cannot_remove_self', message: '自分自身を家族から外すことはできません。' };
   }
   
   const sheet = getSS_().getSheetByName('users');
   const rows = sheet.getDataRange().getValues();
   for (let i = rows.length - 1; i >= 1; i--) {
-    if (String(rows[i][0]).toLowerCase() === emailToRemove) {
+    if (String(rows[i][0]).trim().toLowerCase() === emailToRemove && String(rows[i][1]).trim() === familyId) {
       // 家族から外し、独立した新しい家族IDを自動生成して割り当てる（完全に独立させる）
       const newFamilyId = 'fam_' + Utilities.getUuid().substring(0, 8);
       const newChildId = 'child_' + Utilities.getUuid().substring(0, 8);
       
       sheet.getRange(i + 1, 2).setValue(newFamilyId);
-      sheet.getRange(i + 1, 3).setValue('admin');
+      
+      let roleIndex = rows[0].indexOf('role');
+      if (roleIndex === -1) roleIndex = 2;
+      sheet.getRange(i + 1, roleIndex + 1).setValue('admin');
       
       getSS_().getSheetByName('families').appendRow([newFamilyId, 'わが家']);
       getSS_().getSheetByName('children').appendRow([newChildId, newFamilyId, 'お子さま', '']);
@@ -1434,7 +1463,7 @@ function removeFamilyMember_(params) {
       return { status: 'success' };
     }
   }
-  return { error: 'not_found' };
+  return { error: 'not_found', message: '対象のメンバーが見つかりません。' };
 }
 
 function updateFamily_(params) {
