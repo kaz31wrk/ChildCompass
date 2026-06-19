@@ -692,7 +692,12 @@
 
             // Google認証・家族連携用ステート
             const [googleClientId, setGoogleClientId] = React.useState(GOOGLE_CLIENT_ID || localStorage.getItem('google_client_id') || '');
-            const [userEmail, setUserEmail] = React.useState(localStorage.getItem('user_email') || '');
+            const safeGetEmail = () => {
+                const e = localStorage.getItem('user_email');
+                if (e === 'undefined' || e === 'null') return '';
+                return e || '';
+            };
+            const [userEmail, setUserEmail] = React.useState(safeGetEmail());
             const [authError, setAuthError] = React.useState(null);
             const [globalLoading, setGlobalLoading] = React.useState(false);
             const [roadmapTasks, setRoadmapTasks] = React.useState(() => {
