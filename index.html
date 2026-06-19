@@ -695,6 +695,25 @@
             const [userEmail, setUserEmail] = React.useState(localStorage.getItem('user_email') || '');
             const [authError, setAuthError] = React.useState(null);
             const [globalLoading, setGlobalLoading] = React.useState(false);
+            const [roadmapTasks, setRoadmapTasks] = React.useState(() => {
+                try { return JSON.parse(localStorage.getItem('roadmapTasks')) || {}; }
+                catch(e) { return {}; }
+            });
+            const [showAllRoadmaps, setShowAllRoadmaps] = React.useState(false);
+
+            const formatAge = (months) => {
+                if (months === null) return '生年月日未設定';
+                const y = Math.floor(months / 12);
+                const m = months % 12;
+                if (y > 0) return `${y}歳${m > 0 ? `${m}ヶ月` : ''}`;
+                return `${months}ヶ月`;
+            };
+
+            const toggleRoadmapTask = (taskId) => {
+                const updated = { ...roadmapTasks, [taskId]: !roadmapTasks[taskId] };
+                setRoadmapTasks(updated);
+                localStorage.setItem('roadmapTasks', JSON.stringify(updated));
+            };
 
             // JWTデコード用ヘルパー
             const parseJwt = (token) => {
@@ -1192,15 +1211,21 @@ out center 20;`;
                             setUserEmail(init.email);
                             localStorage.setItem('user_email', init.email);
 
-                            if (!targetFamilyId || activeFamilyId === 'fam_default') {
-                                activeFamilyId = init.familyId;
+                            // 常にバックエンドの家族IDを正とする（招待等で変わる可能性があるため）
+                            activeFamilyId = init.familyId;
+                            setFamilyId(init.familyId);
+                            localStorage.setItem('active_family_id', init.familyId);
+                            
+                            const cachedChildId = localStorage.getItem('active_child_id');
+                            const childExistsInFamily = init.children && init.children.some(c => c.id === cachedChildId);
+                            if (childExistsInFamily) {
+                                activeChildId = cachedChildId;
+                                setChildId(cachedChildId);
+                            } else {
                                 activeChildId = init.childId;
-                                setFamilyId(init.familyId);
                                 setChildId(init.childId);
-                                localStorage.setItem('active_family_id', init.familyId);
                                 localStorage.setItem('active_child_id', init.childId || '');
                             }
-
                             // Phase1で取得した家族・子供・設定・メンバーをすぐ反映
                             setFamilies(init.families || []);
                             setChildren(init.children || []);
@@ -1299,6 +1324,20 @@ out center 20;`;
                         alert('家族連携を解除しました。');
                     }
                 } catch (e) { alert('連携解除に失敗しました。'); }
+                finally { setMemberLoading(false); }
+            };
+
+            const handleUpdateMemberRole = async (email, newRole) => {
+                setMemberLoading(true);
+                try {
+                    const res = await runGas('updateFamilyMemberRole', { email, role: newRole });
+                    if (res.error) {
+                        alert(res.message || '権限の変更に失敗しました。');
+                    } else {
+                        const list = await runGas('getFamilyMembers', { familyId });
+                        setFamilyMembers(list || []);
+                    }
+                } catch (e) { alert('権限の変更に失敗しました。'); }
                 finally { setMemberLoading(false); }
             };
 
@@ -1469,6 +1508,7 @@ out center 20;`;
                 const isFreeType = logType !== '授乳' && logType !== '睡眠' && logType !== '食事' && logType !== 'おむつ' && logType !== '体調';
                 if (isFreeType && !logNote.trim()) return;
                 setLogLoading(true);
+                setGlobalLoading(true);
                 try {
                     await runGas('addLog', {
                         type: logType,
@@ -1488,13 +1528,14 @@ out center 20;`;
                     setLogs(updatedLogs || []);
                     await loadSuggestions();
                 } catch { alert('ログの追加に失敗しました。'); }
-                finally { setLogLoading(false); }
+                finally { setLogLoading(false); setGlobalLoading(false); }
             };
 
             const handleAddGrowth = async (e) => {
                 e.preventDefault();
                 if (!growthHeight && !growthWeight && !growthHead) return;
                 setGrowthLoading(true);
+                setGlobalLoading(true);
                 try {
                     await runGas('addGrowth', {
                         height: growthHeight,
@@ -1511,25 +1552,27 @@ out center 20;`;
                     const g = await runGas('getGrowth', ctx());
                     setGrowthData(g || []);
                 } catch { alert('成長記録の登録に失敗しました。'); }
-                finally { setGrowthLoading(false); }
+                finally { setGrowthLoading(false); setGlobalLoading(false); }
             };
 
             const handleDeleteLog = async (item) => {
                 if (!confirm('このログを削除してもよろしいですか？')) return;
                 const idStr = item.timestamp + item.type;
                 setDeletingLogId(idStr);
+                setGlobalLoading(true);
                 try {
                     await runGas('deleteLog', { timestamp: item.timestamp, type: item.type, ...ctx() });
                     const updatedLogs = await runGas('getLogs', ctx());
                     setLogs(updatedLogs || []);
                 } catch { alert('ログの削除に失敗しました。'); }
-                finally { setDeletingLogId(null); }
+                finally { setDeletingLogId(null); setGlobalLoading(false); }
             };
 
             const handleEditLogSubmit = async (e) => {
                 e.preventDefault();
                 if (!editingLog) return;
                 setEditingLogSaving(true);
+                setGlobalLoading(true);
                 try {
                     const newTimestamp = combineDateTimeToJst(editingLog.date, editingLog.time);
                     await runGas('updateLog', {
@@ -1547,6 +1590,7 @@ out center 20;`;
                     alert('ログの更新に失敗しました。');
                 } finally {
                     setEditingLogSaving(false);
+                    setGlobalLoading(false);
                 }
             };
 
@@ -1577,29 +1621,41 @@ out center 20;`;
             };
 
             const handleSaveSettings = async () => {
-                await runGas('saveSettings', { familyId, settings: settingsForm });
-                localStorage.setItem('user_name', userName);
-                setShowSettings(false);
-                await loadSuggestions();
+                setGlobalLoading(true);
+                try {
+                    await runGas('saveSettings', { familyId, settings: settingsForm });
+                    localStorage.setItem('user_name', userName);
+                    setShowSettings(false);
+                    await loadSuggestions();
+                } catch { alert('設定の保存に失敗しました。'); }
+                finally { setGlobalLoading(false); }
             };
 
             const handleAddFamily = async () => {
                 if (!newFamilyName.trim()) return;
-                const res = await runGas('addFamily', { name: newFamilyName.trim() });
-                setNewFamilyName('');
-                const fam = await runGas('getFamilies');
-                setFamilies(fam || []);
-                if (res.id) setFamilyId(res.id);
+                setGlobalLoading(true);
+                try {
+                    const res = await runGas('addFamily', { name: newFamilyName.trim() });
+                    setNewFamilyName('');
+                    const fam = await runGas('getFamilies');
+                    setFamilies(fam || []);
+                    if (res.id) setFamilyId(res.id);
+                } catch { alert('追加に失敗しました。'); }
+                finally { setGlobalLoading(false); }
             };
 
             const handleAddChild = async () => {
                 if (!newChildName.trim()) return;
-                const res = await runGas('addChild', { familyId, name: newChildName.trim(), birthDate: newChildBirth });
-                setNewChildName('');
-                setNewChildBirth('');
-                const ch = await runGas('getChildren', { familyId });
-                setChildren(ch || []);
-                if (res.id) setChildId(res.id);
+                setGlobalLoading(true);
+                try {
+                    const res = await runGas('addChild', { familyId, name: newChildName.trim(), birthDate: newChildBirth });
+                    setNewChildName('');
+                    setNewChildBirth('');
+                    const ch = await runGas('getChildren', { familyId });
+                    setChildren(ch || []);
+                    if (res.id) setChildId(res.id);
+                } catch { alert('追加に失敗しました。'); }
+                finally { setGlobalLoading(false); }
             };
 
             const handleHideMilestone = async (id, e) => {
@@ -1927,70 +1983,11 @@ out center 20;`;
                                     <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
                                 </div>
 
-                                <div className="space-y-4 text-xs">
-                                    {/* アカウント情報・共有設定 */}
-                                    {userEmail && (
-                                        <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-3.5 space-y-2">
-                                            <div className="font-bold text-indigo-950 flex items-center space-x-1.5">
-                                                <span>👤</span><span>ログイン中のアカウント: {userEmail}</span>
-                                            </div>
-                                            <div className="border-t border-indigo-200/50 pt-2 space-y-2">
-                                                <div className="font-bold text-slate-600 text-[10px] uppercase">家族連携メンバー（同じデータを見るメンバー）</div>
-                                                <div className="space-y-1.5 max-h-24 overflow-y-auto pr-1">
-                                                    {familyMembers.map((m, mi) => (
-                                                        <div key={mi} className="flex justify-between items-center bg-white/80 border border-indigo-100/50 rounded-xl px-2.5 py-1 text-[11px]">
-                                                            <span className="text-slate-700 truncate">{m.email} {m.role === 'admin' && <span className="text-[9px] bg-indigo-100 text-indigo-700 font-bold px-1 py-0.25 rounded-md ml-1">管理者</span>}</span>
-                                                            {m.email.toLowerCase() !== userEmail.toLowerCase() && (
-                                                                <button type="button" onClick={() => handleRemoveMember(m.email)} className="text-red-500 hover:text-red-700 font-bold px-1">解除</button>
-                                                            )}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                                <div className="flex gap-1.5 pt-1">
-                                                    <input type="email" value={newMemberEmail} onChange={e => setNewMemberEmail(e.target.value)} placeholder="追加するGoogleメールアドレス"
-                                                        className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                                                    <button type="button" onClick={handleAddMember} disabled={memberLoading} className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl disabled:opacity-50">追加</button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* ユーザープロフィール設定 */}
-                                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-2">
-                                        <label className="text-[10px] font-bold text-slate-400 uppercase">パパ/ママの表示名</label>
-                                        <input type="text" value={userName} onChange={e => setUserName(e.target.value)} placeholder="例）パパ、ママ、お名前"
-                                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                                    </div>
-
-                                    {/* 予測・サジェスト設定 */}
-                                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
-                                        <div>
-                                            <label className="text-[10px] font-bold text-slate-400 uppercase">次回サジェスト（予測モード）</label>
-                                            <select value={settingsForm.suggest_mode} onChange={e => setSettingsForm(s => ({ ...s, suggest_mode: e.target.value }))}
-                                                className="w-full mt-1 custom-select bg-white border border-slate-200 rounded-xl px-3 py-2 font-semibold text-slate-700">
-                                                <option value="ai">AIによる自律的予測 (推奨)</option>
-                                                <option value="average">直近の平均間隔</option>
-                                                <option value="last">前回の間隔</option>
-                                                <option value="fixed">固定間隔（下の設定値）</option>
-                                            </select>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <div>
-                                                <label className="text-[10px] font-bold text-slate-400">授乳間隔（時間）</label>
-                                                <input type="number" step="0.5" min="1" max="8" value={settingsForm.feed_interval_hours}
-                                                    onChange={e => setSettingsForm(s => ({ ...s, feed_interval_hours: parseFloat(e.target.value) }))}
-                                                    className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2" />
-                                            </div>
-                                            <div>
-                                                <label className="text-[10px] font-bold text-slate-400">睡眠間隔（時間）</label>
-                                                <input type="number" step="0.5" min="0.5" max="12" value={settingsForm.sleep_interval_hours}
-                                                    onChange={e => setSettingsForm(s => ({ ...s, sleep_interval_hours: parseFloat(e.target.value) }))}
-                                                    className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2" />
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* 家族アカウントの編集・削除・追加 */}
+                                <div className="space-y-6 text-xs">
+                                    {/* --- Family設定 --- */}
+                                    <div className="space-y-3">
+                                        <h4 className="font-bold text-slate-800 text-sm border-b pb-1 border-slate-200">Family設定</h4>
+                                        {/* 家族アカウントの編集・削除・追加 */}
                                     <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
                                         <label className="text-[10px] font-bold text-slate-400 uppercase block">家族アカウントの管理・編集</label>
                                         <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
@@ -2029,8 +2026,66 @@ out center 20;`;
                                             </div>
                                         </div>
                                     </div>
+                                        {/* アカウント情報・共有設定 */}
+                                    {userEmail && (
+                                        <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-3.5 space-y-2">
+                                            <div className="font-bold text-indigo-950 flex items-center space-x-1.5">
+                                                <span>👤</span><span>ログイン中のアカウント: {userEmail}</span>
+                                            </div>
+                                            {(() => {
+                                                const currentUserRole = familyMembers.find(m => m.email.toLowerCase() === userEmail.toLowerCase())?.role || 'member';
+                                                const isAdmin = currentUserRole === 'admin';
+                                                return (
+                                                    <div className="border-t border-indigo-200/50 pt-2 space-y-2">
+                                                        <div className="font-bold text-slate-600 text-[10px] uppercase flex justify-between">
+                                                            <span>家族連携メンバー（同じデータを見るメンバー）</span>
+                                                            {!isAdmin && <span className="text-[9px] text-slate-400">※管理操作は管理者のみ可能です</span>}
+                                                        </div>
+                                                        <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                                                            {familyMembers.map((m, mi) => (
+                                                                <div key={mi} className="flex justify-between items-center bg-white/80 border border-indigo-100/50 rounded-xl px-2.5 py-1 text-[11px]">
+                                                                    <span className="text-slate-700 truncate">{m.email} {m.role === 'admin' && <span className="text-[9px] bg-indigo-100 text-indigo-700 font-bold px-1 py-0.25 rounded-md ml-1">管理者</span>}</span>
+                                                                    <div className="flex items-center space-x-2">
+                                                                        {isAdmin && m.email.toLowerCase() !== userEmail.toLowerCase() && (
+                                                                            <select
+                                                                                value={m.role}
+                                                                                onChange={(e) => handleUpdateMemberRole(m.email, e.target.value)}
+                                                                                className="text-[10px] bg-transparent border-b border-indigo-200 text-indigo-700 focus:outline-none cursor-pointer"
+                                                                            >
+                                                                                <option value="admin">管理者</option>
+                                                                                <option value="member">メンバー</option>
+                                                                            </select>
+                                                                        )}
+                                                                        {/* 管理者なら他メンバーを解除可能。自分自身はエラーになるため非表示にするか、別途「家族から抜ける」を設けるかだが、既存に合わせて自分以外とする */}
+                                                                        {isAdmin && m.email.toLowerCase() !== userEmail.toLowerCase() && (
+                                                                            <button type="button" onClick={() => handleRemoveMember(m.email)} className="text-red-500 hover:text-red-700 font-bold px-1">解除</button>
+                                                                        )}
+                                                                        {/* メンバーが自分自身を解除（脱退）する場合は許容する */}
+                                                                        {!isAdmin && m.email.toLowerCase() === userEmail.toLowerCase() && (
+                                                                            <button type="button" onClick={() => handleRemoveMember(m.email)} className="text-red-500 hover:text-red-700 font-bold px-1">抜ける</button>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                        {isAdmin && (
+                                                            <div className="flex gap-1.5 pt-1">
+                                                                <input type="email" value={newMemberEmail} onChange={e => setNewMemberEmail(e.target.value)} placeholder="追加するGoogleメールアドレス"
+                                                                    className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                                                                <button type="button" onClick={handleAddMember} disabled={memberLoading} className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl disabled:opacity-50">追加</button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
+                                    </div>
 
-                                    {/* お子さま情報の編集・削除・追加 */}
+                                    {/* --- Children設定 --- */}
+                                    <div className="space-y-3">
+                                        <h4 className="font-bold text-slate-800 text-sm border-b pb-1 border-slate-200">Children設定</h4>
+                                        {/* お子さま情報の編集・削除・追加 */}
                                     <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
                                         <label className="text-[10px] font-bold text-slate-400 uppercase block">お子さま情報の編集・管理</label>
                                         <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
@@ -2071,8 +2126,45 @@ out center 20;`;
                                             <button type="button" onClick={handleAddChild} className="mt-2 w-full py-2 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl transition-all shadow-md">お子さまを登録</button>
                                         </div>
                                     </div>
+                                        {/* 予測・サジェスト設定 */}
+                                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase">次回サジェスト（予測モード）</label>
+                                            <select value={settingsForm.suggest_mode} onChange={e => setSettingsForm(s => ({ ...s, suggest_mode: e.target.value }))}
+                                                className="w-full mt-1 custom-select bg-white border border-slate-200 rounded-xl px-3 py-2 font-semibold text-slate-700">
+                                                <option value="ai">AIによる自律的予測 (推奨)</option>
+                                                <option value="average">直近の平均間隔</option>
+                                                <option value="last">前回の間隔</option>
+                                                <option value="fixed">固定間隔（下の設定値）</option>
+                                            </select>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-400">授乳間隔（時間）</label>
+                                                <input type="number" step="0.5" min="1" max="8" value={settingsForm.feed_interval_hours}
+                                                    onChange={e => setSettingsForm(s => ({ ...s, feed_interval_hours: parseFloat(e.target.value) }))}
+                                                    className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2" />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-400">睡眠間隔（時間）</label>
+                                                <input type="number" step="0.5" min="0.5" max="12" value={settingsForm.sleep_interval_hours}
+                                                    onChange={e => setSettingsForm(s => ({ ...s, sleep_interval_hours: parseFloat(e.target.value) }))}
+                                                    className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    </div>
 
-                                    {/* Google認証設定（ログアウト） */}
+                                    {/* --- User設定 --- */}
+                                    <div className="space-y-3">
+                                        <h4 className="font-bold text-slate-800 text-sm border-b pb-1 border-slate-200">User設定</h4>
+                                        {/* ユーザープロフィール設定 */}
+                                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-2">
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase">パパ/ママの表示名</label>
+                                        <input type="text" value={userName} onChange={e => setUserName(e.target.value)} placeholder="例）パパ、ママ、お名前"
+                                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                                    </div>
+                                        {/* Google認証設定（ログアウト） */}
                                     <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
                                         <label className="text-[10px] font-bold text-slate-400 uppercase block">Google認証設定</label>
                                         {googleClientId && (
@@ -2095,7 +2187,7 @@ out center 20;`;
                                             </button>
                                         </div>
                                     </div>
-
+                                    </div>
                                     <div className="flex gap-2.5 pt-2 border-t">
                                         <button type="button" onClick={() => setShowSettings(false)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl">閉じる</button>
                                         <button type="button" onClick={handleSaveSettings} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-md">設定を保存</button>
@@ -2593,7 +2685,8 @@ out center 20;`;
                                 </div>
 
                                 {/* 右カラム：地図 (Sticky) */}
-                                <div className="lg:col-span-7 lg:sticky lg:top-24 space-y-3">
+                                {/* マップ (モバイルでは上部、PCでは右) */}
+                                <div className="lg:col-span-7 lg:sticky lg:top-24 space-y-3 order-first lg:order-last">
                                     <div className="flex items-center justify-between">
                                         <p className="text-[11px] text-slate-500">周辺施設の位置情報を地図上で確認できます。</p>
                                         {facilitiesLoading && (
@@ -2643,17 +2736,17 @@ out center 20;`;
                                             <div className="grid grid-cols-3 gap-2">
                                                 <div>
                                                     <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">身長 (cm)</label>
-                                                    <input type="number" step="0.1" min="30" max="150" value={growthHeight} onChange={e => setGrowthHeight(e.target.value)} placeholder="68.2"
+                                                    <input type="number" step="0.1" min="30" max="150" value={growthHeight} onChange={e => setGrowthHeight(e.target.value)} placeholder="0.0"
                                                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                 </div>
                                                 <div>
                                                     <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">体重 (kg)</label>
-                                                    <input type="number" step="0.01" min="1" max="40" value={growthWeight} onChange={e => setGrowthWeight(e.target.value)} placeholder="8.05"
+                                                    <input type="number" step="0.01" min="1" max="40" value={growthWeight} onChange={e => setGrowthWeight(e.target.value)} placeholder="0.00"
                                                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                 </div>
                                                 <div>
                                                     <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">頭囲 (cm)</label>
-                                                    <input type="number" step="0.1" min="20" max="70" value={growthHead} onChange={e => setGrowthHead(e.target.value)} placeholder="43.5"
+                                                    <input type="number" step="0.1" min="20" max="70" value={growthHead} onChange={e => setGrowthHead(e.target.value)} placeholder="0.0"
                                                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                 </div>
                                             </div>
@@ -2759,7 +2852,7 @@ out center 20;`;
                                         <div className="text-[10px] font-bold tracking-wider uppercase opacity-80">お子さまの現在の発達・教育指標</div>
                                         <div className="flex items-baseline space-x-2 mt-1">
                                             <span className="text-xl font-bold font-title">{currentChild ? currentChild.name : 'お子さま'}</span>
-                                            <span className="text-sm font-semibold opacity-90">({months !== null ? `月齢: ${months}ヶ月` : '生年月日未設定'})</span>
+                                            <span className="text-sm font-semibold opacity-90">({formatAge(months)})</span>
                                         </div>
                                         <p className="text-xs opacity-95 mt-2 font-medium">誕生日から月齢を自動判定し、最適なロードマップを提示しています。</p>
                                     </div>
@@ -2771,49 +2864,84 @@ out center 20;`;
                                         </div>
 
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs leading-relaxed text-slate-700">
-                                            <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                                                <div className="font-bold text-slate-800 flex items-center space-x-1.5 mb-1">
-                                                    <span>🧸</span><span>知育・遊び</span>
-                                                </div>
-                                                <p>{info.play}</p>
-                                            </div>
-                                            <div className="p-3 bg-indigo-50/50 border border-indigo-100/50 rounded-xl">
-                                                <div className="font-bold text-indigo-900 flex items-center space-x-1.5 mb-1">
-                                                    <span>✨</span><span>教育・しつけ（性教育含む）</span>
-                                                </div>
-                                                <p>{info.edu}</p>
-                                            </div>
-                                            <div className="p-3 bg-amber-50/50 border border-amber-100/50 rounded-xl">
-                                                <div className="font-bold text-amber-900 flex items-center space-x-1.5 mb-1">
-                                                    <span>🕒</span><span>しつけ・生活習慣</span>
-                                                </div>
-                                                <p>{info.habit}</p>
-                                            </div>
-                                            <div className="p-3 bg-rose-50/50 border border-rose-100/50 rounded-xl">
-                                                <div className="font-bold text-rose-900 flex items-center space-x-1.5 mb-1">
-                                                    <span>💉</span><span>ワクチン・健診リマインダー</span>
-                                                </div>
-                                                <p>{info.vaccine}</p>
-                                            </div>
+                                            {[
+                                                { key: 'play', title: '知育・遊び', icon: '🧸', bg: 'bg-slate-50 border-slate-100', titleColor: 'text-slate-800' },
+                                                { key: 'edu', title: '教育・しつけ（性教育含む）', icon: '✨', bg: 'bg-indigo-50/50 border-indigo-100/50', titleColor: 'text-indigo-900' },
+                                                { key: 'habit', title: 'しつけ・生活習慣', icon: '🕒', bg: 'bg-amber-50/50 border-amber-100/50', titleColor: 'text-amber-900' },
+                                                { key: 'vaccine', title: 'ワクチン・健診リマインダー', icon: '💉', bg: 'bg-rose-50/50 border-rose-100/50', titleColor: 'text-rose-900' }
+                                            ].map(cat => {
+                                                const tasks = (info[cat.key] || '').split('。').map(s => s.trim()).filter(Boolean);
+                                                return (
+                                                    <div key={cat.key} className={`p-3 border rounded-xl ${cat.bg}`}>
+                                                        <div className={`font-bold flex items-center space-x-1.5 mb-2 ${cat.titleColor}`}>
+                                                            <span>{cat.icon}</span><span>{cat.title}</span>
+                                                        </div>
+                                                        <div className="space-y-2">
+                                                            {tasks.map((task, idx) => {
+                                                                const taskId = `${childId}-${info.title}-${cat.key}-${idx}`;
+                                                                const checked = !!roadmapTasks[taskId];
+                                                                return (
+                                                                    <label key={idx} className="flex items-start space-x-2 cursor-pointer hover:bg-white/40 p-1 rounded transition-colors">
+                                                                        <input type="checkbox" checked={checked} onChange={() => toggleRoadmapTask(taskId)} className="mt-0.5 w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500" />
+                                                                        <span className={checked ? 'line-through opacity-60' : ''}>{task}</span>
+                                                                    </label>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
                                     </div>
 
                                     <div className="bg-white/60 border border-slate-150 rounded-2xl p-4 shadow-sm">
-                                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">今後の予測ロードマップ</h4>
-                                        <div className="flex space-x-2 overflow-x-auto pb-1 custom-scrollbar">
-                                            {[
-                                                { m: 2, label: '3m (首すわり)' },
-                                                { m: 6, label: '6m (お座り)' },
-                                                { m: 10, label: '1y (伝い歩き)' },
-                                                { m: 15, label: '1.5y (言葉)' },
-                                                { m: 24, label: '2y (習慣・性教育)' }
-                                            ].map((item, idx) => (
-                                                <div key={idx} className={`shrink-0 px-3 py-2 border rounded-xl text-center min-w-[100px] ${displayMonths >= item.m ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-400'}`}>
-                                                    <div className="text-xs font-bold">{item.label}</div>
-                                                    <div className="text-[9px] mt-0.5 font-semibold">{displayMonths >= item.m ? '達成目標期' : '将来予測'}</div>
-                                                </div>
-                                            ))}
+                                        <div className="flex items-center justify-between mb-3">
+                                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">すべてのロードマップを表示</h4>
+                                            <button onClick={() => setShowAllRoadmaps(!showAllRoadmaps)} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded border border-indigo-200">
+                                                {showAllRoadmaps ? '非表示にする' : '表示する'}
+                                            </button>
                                         </div>
+                                        
+                                        {showAllRoadmaps && (
+                                            <div className="mt-4 space-y-4">
+                                                {[3, 6, 9, 12, 18, 24].map(m => {
+                                                    const rInfo = getRoadmapData(m);
+                                                    if (rInfo.title === info.title) return null; // 現在の推奨期と同じならスキップ
+                                                    return (
+                                                        <div key={m} className="border border-slate-200 rounded-xl p-3 bg-white">
+                                                            <div className="font-bold text-sm text-slate-700 mb-2">{rInfo.title}</div>
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                                                                {[
+                                                                    { key: 'play', title: '知育・遊び', icon: '🧸' },
+                                                                    { key: 'edu', title: '教育・しつけ', icon: '✨' },
+                                                                    { key: 'habit', title: '生活習慣', icon: '🕒' },
+                                                                    { key: 'vaccine', title: '健診', icon: '💉' }
+                                                                ].map(cat => {
+                                                                    const tasks = (rInfo[cat.key] || '').split('。').map(s => s.trim()).filter(Boolean);
+                                                                    return (
+                                                                        <div key={cat.key} className="p-2 bg-slate-50 rounded-lg">
+                                                                            <div className="font-bold text-slate-600 mb-1 flex space-x-1"><span>{cat.icon}</span><span>{cat.title}</span></div>
+                                                                            <div className="space-y-1">
+                                                                                {tasks.map((task, idx) => {
+                                                                                    const taskId = `${childId}-${rInfo.title}-${cat.key}-${idx}`;
+                                                                                    const checked = !!roadmapTasks[taskId];
+                                                                                    return (
+                                                                                        <label key={idx} className="flex items-start space-x-2 cursor-pointer hover:bg-white p-1 rounded">
+                                                                                            <input type="checkbox" checked={checked} onChange={() => toggleRoadmapTask(taskId)} className="mt-0.5 w-3.5 h-3.5 rounded" />
+                                                                                            <span className={`text-[10px] ${checked ? 'line-through opacity-50' : 'text-slate-600'}`}>{task}</span>
+                                                                                        </label>
+                                                                                    );
+                                                                                })}
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             );

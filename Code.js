@@ -118,6 +118,7 @@ function handleAction(actionName, params) {
       case 'getFamilyMembers': return getFamilyMembers_(params);
       case 'addFamilyMember': return addFamilyMember_(params);
       case 'removeFamilyMember': return removeFamilyMember_(params);
+      case 'updateFamilyMemberRole': return updateFamilyMemberRole_(params);
       case 'updateFamily': return updateFamily_(params);
       case 'deleteFamily': return deleteFamily_(params);
       case 'updateChild': return updateChild_(params);
@@ -164,7 +165,7 @@ function initSpreadsheet() {
   if (!activeSS) throw new Error("Active Spreadsheet is not accessible.");
 
   ensureSheet('errors', ['timestamp', 'context', 'message', 'stack']);
-  ensureSheet('users', ['email', 'family_id', 'role']);
+  ensureSheet('users', ['email', 'family_id', 'role'], null, upgradeUsersSheet);
   ensureSheet('growth', ['timestamp', 'family_id', 'child_id', 'height', 'weight', 'head_circumference']);
 
   // APIキーの自動設定
@@ -194,6 +195,22 @@ function initSpreadsheet() {
   });
 
   initMilestonesSheet(activeSS);
+}
+
+function upgradeUsersSheet(sheet) {
+  const data = sheet.getDataRange().getValues();
+  if (data.length === 0) return;
+  const header = data[0];
+  if (header.indexOf('role') === -1) {
+    sheet.getRange(1, 3).setValue('role');
+    const rows = sheet.getLastRow();
+    if (rows > 1) {
+      const count = rows - 1;
+      sheet.getRange(2, 3, count, 1).setValues(
+        Array(count).fill(null).map(() => ['admin'])
+      );
+    }
+  }
 }
 
 function upgradeLogsSheet(sheet) {
@@ -1301,9 +1318,17 @@ function getFamilyMembers_(params) {
 }
 
 function addFamilyMember_(params) {
-  const familyId = params.familyId;
   const emailToAdd = String(params.email).trim().toLowerCase();
-  if (!familyId || !emailToAdd) return { error: 'invalid_params' };
+  if (!emailToAdd) return { error: 'invalid_params' };
+  
+  const myEmail = params.myEmail || Session.getActiveUser().getEmail();
+  const users = getData('users');
+  const me = users.find(u => String(u.email).toLowerCase() === String(myEmail).toLowerCase());
+  
+  if (!me || !me.family_id) {
+    return { error: 'inviter_not_found', message: '招待者の家族情報が見つかりません。' };
+  }
+  const familyId = me.family_id;
   
   const sheet = getSS_().getSheetByName('users');
   const rows = sheet.getDataRange().getValues();
@@ -1318,6 +1343,39 @@ function addFamilyMember_(params) {
   // 新規登録
   sheet.appendRow([emailToAdd, familyId, 'member']);
   return { status: 'success', updated: false };
+}
+
+function updateFamilyMemberRole_(params) {
+  const targetEmail = String(params.email).trim().toLowerCase();
+  const newRole = params.role; // 'admin' or 'member'
+  const myEmail = params.myEmail || Session.getActiveUser().getEmail();
+  
+  if (!targetEmail || !newRole) return { error: 'invalid_params' };
+  
+  const sheet = getSS_().getSheetByName('users');
+  const rows = sheet.getDataRange().getValues();
+  
+  // Find my role to check permissions
+  let myRole = 'member';
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).toLowerCase() === String(myEmail).toLowerCase()) {
+      myRole = rows[i][2];
+      break;
+    }
+  }
+  
+  if (myRole !== 'admin') {
+    return { error: 'unauthorized', message: '権限を変更するには管理者である必要があります。' };
+  }
+  
+  // Update target user's role
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).toLowerCase() === targetEmail) {
+      sheet.getRange(i + 1, 3).setValue(newRole);
+      return { status: 'success' };
+    }
+  }
+  return { error: 'not_found' };
 }
 
 function removeFamilyMember_(params) {
