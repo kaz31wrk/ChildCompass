@@ -15,10 +15,13 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
 - ファイルが不完全な状態（途中で切れるなど）になると、Babel Standalone のトランスパイルエラーにより、ブラウザ上で `Failed to execute 'appendChild' on 'Node': Cannot use import statement outside a module` などの致命的なエラーが発生し、画面全体が真っ白になります。
 - 編集時には必ずファイルの完全性を損なわないように注意してください。
 - **デプロイルール（必須）**:
-  コードを変更した後は、例外なく毎回 `clasp push` を実行し、その後以下のデプロイIDを指定してWebアプリケーションの上書きデプロイ（再デプロイ）を行ってください。
-  - デプロイID: `AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw`
-  - 実行コマンド: `clasp deploy -i AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw -d "Description (変更内容)"`
-  - WebアプリURL: `https://script.google.com/macros/s/AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw/exec`
+  コードを変更した後は、例外なく毎回以下の2つのデプロイ作業を行ってください。
+  1. **GASへのデプロイ**: `clasp push` を実行し、指定のデプロイIDでWebアプリケーションの上書きデプロイ（再デプロイ）を行ってください。
+     - デプロイID: `AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw`
+     - 実行コマンド: `clasp deploy -i AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw -d "Description (変更内容)"`
+     - WebアプリURL: `https://script.google.com/macros/s/AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw/exec`
+  2. **GitHub Pagesへのデプロイ**: 上記に加え、必ず変更をGitにコミットし、`main` ブランチへ `git push` を行ってください。これにより以下のURL（GitHub Pages）にもフロントエンドの変更が反映されます。
+     - GitHub Pages URL: `https://kaz31wrk.github.io/ChildCompass/`
 
 ## 修正履歴
 
