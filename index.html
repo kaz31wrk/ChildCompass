@@ -449,6 +449,7 @@
             Chart: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /><path d="M3 20c3-3 6-3 9 0s6 3 9 0" /></svg>,
             Roadmap: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></svg>,
             Emergency: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" /><path d="M12 8v8" /><path d="M8 12h8" /></svg>,
+            X: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>,
         };
 
         // ============================================================
@@ -823,6 +824,8 @@
             // History Modal states
             const [showAllLogs, setShowAllLogs] = React.useState(false);
             const [deletingLogId, setDeletingLogId] = React.useState(null);
+            const [editingLog, setEditingLog] = React.useState(null);
+            const [editingLogSaving, setEditingLogSaving] = React.useState(false);
 
             // User Profile
             const [userName, setUserName] = React.useState(localStorage.getItem('user_name') || '');
@@ -1415,28 +1418,43 @@ out center 20;`;
                             base64Image: base64Data,
                             mimeType: mimeType
                         });
-                        const cleaned = reply.replace(/```json/g, '').replace(/```/g, '').trim();
-                        const data = JSON.parse(cleaned);
+                        let parsedData = null;
+                        let rawReply = reply;
+                        try {
+                            const cleaned = reply.replace(/```json/g, '').replace(/```/g, '').trim();
+                            parsedData = JSON.parse(cleaned);
+                        } catch (err) {
+                            console.error('OCR JSON Parse Error:', err);
+                        }
 
-                        if (tabContext === 'log') {
-                            if (data.type && ['授乳', '睡眠', '食事', 'おむつ', '体調', 'その他'].includes(data.type)) {
-                                setLogType(data.type);
+                        if (parsedData) {
+                            if (tabContext === 'log') {
+                                if (parsedData.type && ['授乳', '睡眠', '食事', 'おむつ', '体調', 'その他'].includes(parsedData.type)) {
+                                    setLogType(parsedData.type);
+                                }
+                                if (parsedData.ml != null) setMilkMl(Number(parsedData.ml));
+                                if (parsedData.minutes != null) {
+                                    if (parsedData.type === '睡眠') setSleepMin(Number(parsedData.minutes));
+                                    else setMilkMin(Number(parsedData.minutes));
+                                }
+                                if (parsedData.temperature != null) setSymptomTemp(Number(parsedData.temperature));
+                                if (parsedData.note) setLogNote(parsedData.note);
+                            } else if (tabContext === 'growth') {
+                                if (parsedData.height != null) setGrowthHeight(String(parsedData.height));
+                                if (parsedData.weight != null) setGrowthWeight(String(parsedData.weight));
+                                if (parsedData.head != null) setGrowthHead(String(parsedData.head));
                             }
-                            if (data.ml != null) setMilkMl(Number(data.ml));
-                            if (data.minutes != null) {
-                                if (data.type === '睡眠') setSleepMin(Number(data.minutes));
-                                else setMilkMin(Number(data.minutes));
+                        } else {
+                            // Fallback: Dump raw text to note
+                            if (tabContext === 'log') {
+                                setLogType('その他');
+                                setLogNote(rawReply);
                             }
-                            if (data.temperature != null) setSymptomTemp(Number(data.temperature));
-                            if (data.note) setLogNote(data.note);
-                        } else if (tabContext === 'growth') {
-                            if (data.height != null) setGrowthHeight(String(data.height));
-                            if (data.weight != null) setGrowthWeight(String(data.weight));
-                            if (data.head != null) setGrowthHead(String(data.head));
+                            alert('自動解析の形式が一部崩れました。読み取れたテキストをメモ欄に入力しました。');
                         }
                     } catch (err) {
-                        console.error('OCR Error:', err);
-                        alert('画像の解析に失敗しました。');
+                        console.error('OCR API Error:', err);
+                        alert('通信エラーまたは解析に失敗しました。');
                     } finally {
                         if (tabContext === 'log') setLogLoading(false);
                         else if (tabContext === 'growth') setGrowthLoading(false);
@@ -1496,15 +1514,40 @@ out center 20;`;
                 finally { setGrowthLoading(false); }
             };
 
-            const handleDeleteLog = async (logId) => {
+            const handleDeleteLog = async (item) => {
                 if (!confirm('このログを削除してもよろしいですか？')) return;
-                setDeletingLogId(logId);
+                const idStr = item.timestamp + item.type;
+                setDeletingLogId(idStr);
                 try {
-                    await runGas('deleteLog', { logId, ...ctx() });
+                    await runGas('deleteLog', { timestamp: item.timestamp, type: item.type, ...ctx() });
                     const updatedLogs = await runGas('getLogs', ctx());
                     setLogs(updatedLogs || []);
                 } catch { alert('ログの削除に失敗しました。'); }
                 finally { setDeletingLogId(null); }
+            };
+
+            const handleEditLogSubmit = async (e) => {
+                e.preventDefault();
+                if (!editingLog) return;
+                setEditingLogSaving(true);
+                try {
+                    const newTimestamp = combineDateTimeToJst(editingLog.date, editingLog.time);
+                    await runGas('updateLog', {
+                        oldTimestamp: editingLog.oldTimestamp,
+                        oldType: editingLog.oldType,
+                        newTimestamp: newTimestamp,
+                        newType: editingLog.type,
+                        newNote: editingLog.note,
+                        ...ctx()
+                    });
+                    const updatedLogs = await runGas('getLogs', ctx());
+                    setLogs(updatedLogs || []);
+                    setEditingLog(null);
+                } catch {
+                    alert('ログの更新に失敗しました。');
+                } finally {
+                    setEditingLogSaving(false);
+                }
             };
 
             const handleEvaluateSymptom = async (e) => {
@@ -3140,9 +3183,31 @@ out center 20;`;
                                                     <span className="text-xs text-slate-500 font-mono">{item.timestamp}</span>
                                                 </div>
                                                 <div className="flex items-center space-x-3">
-                                                    <button onClick={() => alert('編集機能は近日公開予定です。')} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors px-2 py-1 rounded-lg hover:bg-indigo-50">編集</button>
-                                                    <button onClick={() => handleDeleteLog(item.id)} disabled={deletingLogId === item.id} className="text-xs font-bold text-rose-600 hover:text-rose-800 transition-colors px-2 py-1 rounded-lg hover:bg-rose-50 disabled:opacity-50">
-                                                        {deletingLogId === item.id ? '削除中...' : '削除'}
+                                                    <button onClick={() => {
+                                                        const ts = item.timestamp; // e.g. "2026/06/19 10:00:00"
+                                                        let dStr = '';
+                                                        let tStr = '';
+                                                        if (ts && ts.includes(' ')) {
+                                                            const [dPart, tPart] = ts.split(' ');
+                                                            dStr = dPart.replace(/\//g, '-');
+                                                            tStr = tPart.substring(0, 5);
+                                                        } else {
+                                                            const d = new Date();
+                                                            const pad = (n) => n.toString().padStart(2, '0');
+                                                            dStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+                                                            tStr = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                                                        }
+                                                        setEditingLog({
+                                                            oldTimestamp: item.timestamp,
+                                                            oldType: item.type,
+                                                            date: dStr,
+                                                            time: tStr,
+                                                            type: item.type,
+                                                            note: item.note || ''
+                                                        });
+                                                    }} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors px-2 py-1 rounded-lg hover:bg-indigo-50">編集</button>
+                                                    <button onClick={() => handleDeleteLog(item)} disabled={deletingLogId === (item.timestamp + item.type)} className="text-xs font-bold text-rose-600 hover:text-rose-800 transition-colors px-2 py-1 rounded-lg hover:bg-rose-50 disabled:opacity-50">
+                                                        {deletingLogId === (item.timestamp + item.type) ? '削除中...' : '削除'}
                                                     </button>
                                                 </div>
                                             </div>
@@ -3150,6 +3215,44 @@ out center 20;`;
                                         </div>
                                     ))
                                 )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Edit Log Modal */}
+                    {editingLog && (
+                        <div className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4 animate-fade-in" onClick={() => setEditingLog(null)}>
+                            <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
+                                <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                                    <h3 className="font-bold text-slate-800 text-sm">履歴の編集</h3>
+                                    <button onClick={() => setEditingLog(null)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+                                </div>
+                                <form onSubmit={handleEditLogSubmit} className="space-y-4">
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">日時</label>
+                                        <div className="flex space-x-2">
+                                            <input type="date" value={editingLog.date} onChange={e => setEditingLog({...editingLog, date: e.target.value})}
+                                                className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" required />
+                                            <input type="time" value={editingLog.time} onChange={e => setEditingLog({...editingLog, time: e.target.value})}
+                                                className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" required />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">種類</label>
+                                        <select value={editingLog.type} onChange={e => setEditingLog({...editingLog, type: e.target.value})}
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" required>
+                                            {['授乳', '睡眠', '食事', 'おむつ', '体調', 'その他'].map(t => <option key={t} value={t}>{t}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">メモ・詳細</label>
+                                        <textarea value={editingLog.note} onChange={e => setEditingLog({...editingLog, note: e.target.value})}
+                                            rows="3" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"></textarea>
+                                    </div>
+                                    <button type="submit" disabled={editingLogSaving} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-200 transition-all disabled:opacity-50">
+                                        {editingLogSaving ? '保存中...' : '変更を保存する'}
+                                    </button>
+                                </form>
                             </div>
                         </div>
                     )}
