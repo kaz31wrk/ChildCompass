@@ -502,3 +502,20 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
   3. `showAllLogs` ステートを追加し、タイムラインの「すべて見る」ボタンから全画面のモーダルダイアログを起動するUIを実装。各ログカードに「編集（未実装アラート）」と「削除（`runGas('deleteLog')`をコール）」ボタンを追加。
   4. 設定画面に `userName` の入力欄を追加。`localStorage` へ保存・読み出しを行い、ダッシュボードヘッダー（`ChildCompass` の横）に「〇〇さん」と表示されるように修正。
 
+### 2026-06-19 (AIスケジュール自律化およびOCR画像入力機能の実装)
+
+- **要望**:
+  1. 次の睡眠や授乳の時間は、平均間隔で見るのではなくAIが自律的かつ総合的に考慮して決めるようにする（設定画面の「平均間隔」に代わる「AI自律予測」の統合）。
+  2. 画像をAIに渡して、自動で入力してくれる機能を実装する（記録タブ・成長タブの両方）。
+  3. `index.html` に残存していたJSX構文エラー（SyntaxError）を解消する。
+- **対応**:
+  1. `index.html` のJSXのネスト不整合（`<div>`の閉じタグが余分に存在し、`Timeline`要素と兄弟関係で宙に浮いていた問題）を特定し、余分な閉じタグを削除して `SyntaxError` を解決した。
+  2. **AIスケジュール自律化**:
+     - `index.html` 内の `callGeminiDirectly` を利用して、GASの `getLogSuggestionsPromptAndKey` から取得したプロンプトをGemini APIに直接送信し、自律的なスケジュール予測を行う `fetchSuggestionsWithMode` を実装。
+     - 設定画面（`settingsForm`）の予測モードに「AIによる自律的予測 (推奨)」オプションを追加し、デフォルトでAIが予測を行うように連携。
+  3. **OCR画像入力機能**:
+     - `index.html` の `callGeminiDirectly` にて、Base64エンコードされた画像データ（`inlineData`）をペイロードに含められるよう拡張。
+     - ダッシュボードの「育児ログ」と「成長ログ」の各ヘッダーにカメラアイコン付きの `<input type="file" capture="environment">` ボタンを配置。
+     - `handleOCRImageUpload` を実装し、アップロードされた画像を Gemini API ( `getOCRAnalysisPromptAndKey` ) に送信。返却されたJSONデータをパースして、フォーム（タイプ、量、時間、身長・体重など）に自動でステート反映する機能を構築。
+  4. 変更後、`git push` によるフロントエンド（GitHub Pages）へのデプロイと、`clasp push` および上書きデプロイ（デプロイID: `AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw`）を実行して本番環境へ反映。
+
