@@ -1330,7 +1330,7 @@ out center 20;`;
             const handleUpdateMemberRole = async (email, newRole) => {
                 setMemberLoading(true);
                 try {
-                    const res = await runGas('updateFamilyMemberRole', { email, role: newRole });
+                    const res = await runGas('updateFamilyMemberRole', { email, role: newRole, myEmail: userEmail });
                     if (res.error) {
                         alert(res.message || '権限の変更に失敗しました。');
                     } else {
