@@ -201,14 +201,28 @@ function upgradeUsersSheet(sheet) {
   const data = sheet.getDataRange().getValues();
   if (data.length === 0) return;
   const header = data[0];
-  if (header.indexOf('role') === -1) {
+  let roleIndex = header.indexOf('role');
+  
+  if (roleIndex === -1) {
     sheet.getRange(1, 3).setValue('role');
-    const rows = sheet.getLastRow();
-    if (rows > 1) {
-      const count = rows - 1;
-      sheet.getRange(2, 3, count, 1).setValues(
-        Array(count).fill(null).map(() => ['admin'])
-      );
+    roleIndex = 2; // Col 3
+  }
+  
+  const rows = sheet.getLastRow();
+  if (rows > 1) {
+    const updates = [];
+    let needsUpdate = false;
+    for (let i = 1; i < data.length; i++) {
+      const currentRole = data[i][roleIndex] || '';
+      if (!currentRole) {
+        updates.push(['admin']);
+        needsUpdate = true;
+      } else {
+        updates.push([currentRole]);
+      }
+    }
+    if (needsUpdate) {
+      sheet.getRange(2, roleIndex + 1, updates.length, 1).setValues(updates);
     }
   }
 }
@@ -1354,12 +1368,15 @@ function updateFamilyMemberRole_(params) {
   
   const sheet = getSS_().getSheetByName('users');
   const rows = sheet.getDataRange().getValues();
+  const header = rows[0] || [];
+  let roleIndex = header.indexOf('role');
+  if (roleIndex === -1) roleIndex = 2; // Fallback
   
   // Find my role to check permissions
   let myRole = 'member';
   for (let i = 1; i < rows.length; i++) {
     if (String(rows[i][0]).toLowerCase() === String(myEmail).toLowerCase()) {
-      myRole = rows[i][2];
+      myRole = rows[i][roleIndex];
       break;
     }
   }
@@ -1371,11 +1388,11 @@ function updateFamilyMemberRole_(params) {
   // Update target user's role
   for (let i = 1; i < rows.length; i++) {
     if (String(rows[i][0]).toLowerCase() === targetEmail) {
-      sheet.getRange(i + 1, 3).setValue(newRole);
+      sheet.getRange(i + 1, roleIndex + 1).setValue(newRole);
       return { status: 'success' };
     }
   }
-  return { error: 'not_found' };
+  return { error: 'not_found', message: '対象のユーザーが見つかりません。' };
 }
 
 function removeFamilyMember_(params) {
