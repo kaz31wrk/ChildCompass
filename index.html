@@ -1250,7 +1250,8 @@ out center 20;`;
                         if (g) setGrowthData(g);
                     });
 
-                    const mode = init?.settings?.suggest_mode || 'ai';
+                    // 取得直後のステートは未反映の可能性があるため、現在の値またはデフォルトを使用
+                    const mode = settings?.suggest_mode || 'ai';
                     fetchSuggestionsWithMode(mode, c).then(s => {
                         if (s && !s.error) {
                             setSuggestions(s);
