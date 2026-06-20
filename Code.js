@@ -94,7 +94,8 @@ function handleAction(actionName, params) {
   const writeActions = [
     'addLog', 'updateLog', 'deleteLog', 'toggleMilestone', 'hideMilestone', 'addMilestone', 'saveSettings',
     'addFamily', 'addChild', 'addGrowth', 'getOrCheckUser', 'addFamilyMember',
-    'removeFamilyMember', 'updateFamily', 'deleteFamily', 'updateChild', 'deleteChild'
+    'removeFamilyMember', 'updateFamily', 'deleteFamily', 'updateChild', 'deleteChild',
+    'updateUserProfile', 'deleteGrowth', 'updateGrowth'
   ];
 
   const execute = () => {
@@ -141,6 +142,10 @@ function handleAction(actionName, params) {
       case 'deleteFamily': return deleteFamily_(params);
       case 'updateChild': return updateChild_(params);
       case 'deleteChild': return deleteChild_(params);
+      case 'updateUserProfile': return updateUserProfile_(params);
+      case 'deleteGrowth': return deleteGrowth_(params);
+      case 'updateGrowth': return updateGrowth_(params);
+      case 'getRoadmapSuggestionsPromptAndKey': return getRoadmapSuggestionsPromptAndKey_(params);
       default: return { error: 'invalid_action' };
     }
   };
@@ -183,7 +188,7 @@ function initSpreadsheet() {
   if (!activeSS) throw new Error("Active Spreadsheet is not accessible.");
 
   ensureSheet('errors', ['timestamp', 'context', 'message', 'stack']);
-  ensureSheet('users', ['email', 'family_id', 'role'], null, upgradeUsersSheet);
+  ensureSheet('users', ['email', 'family_id', 'role', 'display_name'], null, upgradeUsersSheet);
   ensureSheet('growth', ['timestamp', 'family_id', 'child_id', 'height', 'weight', 'head_circumference']);
 
   // APIキーの自動設定
@@ -220,27 +225,30 @@ function upgradeUsersSheet(sheet) {
   if (data.length === 0) return;
   const header = data[0];
   let roleIndex = header.indexOf('role');
+  let nameIndex = header.indexOf('display_name');
   
+  let maxCol = header.length;
   if (roleIndex === -1) {
-    sheet.getRange(1, 3).setValue('role');
-    roleIndex = 2; // Col 3
+    sheet.getRange(1, maxCol + 1).setValue('role');
+    roleIndex = maxCol;
+    maxCol++;
+  }
+  if (nameIndex === -1) {
+    sheet.getRange(1, maxCol + 1).setValue('display_name');
+    nameIndex = maxCol;
+    maxCol++;
   }
   
   const rows = sheet.getLastRow();
   if (rows > 1) {
+    const dataNew = sheet.getDataRange().getValues();
     const updates = [];
     let needsUpdate = false;
-    for (let i = 1; i < data.length; i++) {
-      const currentRole = data[i][roleIndex] || '';
+    for (let i = 1; i < dataNew.length; i++) {
+      const currentRole = dataNew[i][roleIndex] || '';
       if (!currentRole) {
-        updates.push(['admin']);
-        needsUpdate = true;
-      } else {
-        updates.push([currentRole]);
+        sheet.getRange(i + 1, roleIndex + 1).setValue('admin');
       }
-    }
-    if (needsUpdate) {
-      sheet.getRange(2, roleIndex + 1, updates.length, 1).setValues(updates);
     }
   }
 }
@@ -1317,7 +1325,7 @@ function getOrCheckUser_(params) {
     const childId = 'child_' + Utilities.getUuid().substring(0, 8);
     
     const usersSheet = getSS_().getSheetByName('users');
-    usersSheet.appendRow([email, familyId, 'admin']);
+    usersSheet.appendRow([email, familyId, 'admin', '']);
     
     getSS_().getSheetByName('families').appendRow([familyId, 'わが家']);
     getSS_().getSheetByName('children').appendRow([childId, familyId, 'お子さま', '']);
@@ -1333,20 +1341,20 @@ function getOrCheckUser_(params) {
     ];
     defaults.forEach(r => settingsSheet.appendRow(r));
     
-    return { email, familyId, childId, isNew: true };
+    return { email, familyId, childId, displayName: '', isNew: true };
   }
   
   // ユーザーが見つかった場合、家族に紐づく子供リストを取得
   const children = getChildrenFiltered({ familyId: user.family_id });
   const childId = children.length > 0 ? children[0].id : '';
-  return { email, familyId: user.family_id, childId, isNew: false };
+  return { email, familyId: user.family_id, childId, displayName: user.display_name || '', isNew: false };
 }
 
 function getFamilyMembers_(params) {
   const familyId = params.familyId;
   if (!familyId) return [];
   const users = getData('users');
-  return users.filter(u => u.family_id === familyId).map(u => ({ email: u.email, role: u.role }));
+  return users.filter(u => u.family_id === familyId).map(u => ({ email: u.email, role: u.role, displayName: u.display_name || '' }));
 }
 
 function addFamilyMember_(params) {
@@ -1607,6 +1615,7 @@ function getInitialData_(params) {
       familyId,
       childId,
       isNew: authResult.isNew,
+      displayName: authResult.displayName || '',
       families,
       children,
       settings,
@@ -1643,4 +1652,80 @@ function geocodeAddress_(params) {
     if (typeof logError_ === 'function') logError_(e, 'geocodeAddress_');
     return { error: 'geocode_error', message: String(e) };
   }
+}
+
+function updateUserProfile_(params) {
+  const email = params.email;
+  const displayName = params.displayName || '';
+  if (!email) return { error: 'invalid_params' };
+  
+  const sheet = getSS_().getSheetByName('users');
+  const rows = sheet.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).trim().toLowerCase() === email.trim().toLowerCase()) {
+      sheet.getRange(i + 1, 4).setValue(displayName);
+      return { status: 'success', displayName: displayName };
+    }
+  }
+  return { error: 'user_not_found' };
+}
+
+function deleteGrowth_(params) {
+  const sheet = getSS_().getSheetByName('growth');
+  const rows = sheet.getDataRange().getValues();
+  const { familyId, childId, timestamp } = params;
+  const targetTs = normalizeTimestamp(timestamp);
+  
+  for (let i = 1; i < rows.length; i++) {
+    const rTimestamp = normalizeTimestamp(rows[i][0]);
+    if (rTimestamp === targetTs && rows[i][1] === familyId && rows[i][2] === childId) {
+      sheet.deleteRow(i + 1);
+      return { status: 'success' };
+    }
+  }
+  return { status: 'error', message: '対象の測定記録が見つかりませんでした。' };
+}
+
+function updateGrowth_(params) {
+  const sheet = getSS_().getSheetByName('growth');
+  const rows = sheet.getDataRange().getValues();
+  const { familyId, childId, oldTimestamp, newTimestamp, height, weight, headCircumference } = params;
+  const targetTs = normalizeTimestamp(oldTimestamp);
+  
+  for (let i = 1; i < rows.length; i++) {
+    const rTimestamp = normalizeTimestamp(rows[i][0]);
+    if (rTimestamp === targetTs && rows[i][1] === familyId && rows[i][2] === childId) {
+      const ts = newTimestamp ? normalizeTimestamp(newTimestamp) : targetTs;
+      sheet.getRange(i + 1, 1, 1, 6).setValues([[
+        ts,
+        familyId,
+        childId,
+        height || '',
+        weight || '',
+        headCircumference || ''
+      ]]);
+      return { status: 'success' };
+    }
+  }
+  return { status: 'error', message: '対象の測定記録が見つかりませんでした。' };
+}
+
+function getRoadmapSuggestionsPromptAndKey_(params) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
+  const familyId = params.familyId || DEFAULT_FAMILY_ID;
+  const child = getChildContext(params.childId, familyId);
+  
+  const prompt = `あなたは小児発達・幼児教育の専門家です。以下の家族・子ども情報を踏まえ、
+追加すべき成長目標・育児タスク（知育、しつけ、生活習慣など）を5個、JSON配列のみで提案してください。
+必ず以下のJSON形式の配列のみで回答を返してください。不要な説明文やコードブロックマーク（\`\`\`json等）は一切含めないでください。
+形式：
+[
+  {"title": "目標・タスクの簡潔なタイトル", "category": "対象のカテゴリキー"}
+]
+※categoryは必ず次のいずれかを選択してください: '0-1m', '0-3m', '3-6m', '6-9m', '9-12m', '1y', '1.5y', '2y', '2.5y', '3y', '4-5y', '6y'
+
+【子ども】${child}
+【相談・要望】${params.prompt || '発達に合わせた項目を追加'}`;
+
+  return { prompt, apiKey };
 }

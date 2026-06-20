@@ -345,7 +345,7 @@
                 });
             }
 
-            if (actionName === 'getSymptomPromptAndKey' || actionName === 'getLogSuggestionsPromptAndKey' || actionName === 'getOCRAnalysisPromptAndKey') {
+            if (actionName === 'getSymptomPromptAndKey' || actionName === 'getLogSuggestionsPromptAndKey' || actionName === 'getOCRAnalysisPromptAndKey' || actionName === 'getRoadmapSuggestionsPromptAndKey') {
                 bodyPayload.generationConfig = { responseMimeType: "application/json" };
             }
 
@@ -853,6 +853,20 @@
 
             // User Profile
             const [userName, setUserName] = React.useState(localStorage.getItem('user_name') || '');
+            const [showMyAccountModal, setShowMyAccountModal] = React.useState(false);
+            const [myAccountSaving, setMyAccountSaving] = React.useState(false);
+
+            // Growth Modals
+            const [showAllGrowth, setShowAllGrowth] = React.useState(false);
+            const [editingGrowth, setEditingGrowth] = React.useState(null);
+            const [editingGrowthSaving, setEditingGrowthSaving] = React.useState(false);
+            const [deletingGrowthId, setDeletingGrowthId] = React.useState(null);
+
+            // Roadmap Custom states
+            const [roadmapAiLoading, setRoadmapAiLoading] = React.useState(false);
+            const [roadmapAiSuggestions, setRoadmapAiSuggestions] = React.useState([]);
+            const [roadmapCustomTitle, setRoadmapCustomTitle] = React.useState('');
+            const [roadmapCustomCategory, setRoadmapCustomCategory] = React.useState('1y');
 
             // Health states
             const [bodyTemp, setBodyTemp] = React.useState('36.5');
@@ -1169,6 +1183,7 @@ out center 20;`;
 
             const loadActiveData = async () => {
                 if (!familyId || familyId === 'fam_default') return;
+                setGlobalLoading(true);
                 const c = { familyId, childId };
                 try {
                     const [l, m, g] = await Promise.all([
@@ -1188,6 +1203,8 @@ out center 20;`;
                     if (s.sleepMin && s.sleepMin.length) setSleepMin(s.sleepMin[0]);
                 } catch (e) {
                     console.error("Failed to load active data", e);
+                } finally {
+                    setGlobalLoading(false);
                 }
             };
 
@@ -1215,6 +1232,10 @@ out center 20;`;
                             // 認証情報をステートに反映（即座にUIに表示される）
                             setUserEmail(init.email);
                             localStorage.setItem('user_email', init.email);
+                            if (init.displayName) {
+                                setUserName(init.displayName);
+                                localStorage.setItem('user_name', init.displayName);
+                            }
 
                             // 常にバックエンドの家族IDを正とする（招待等で変わる可能性があるため）
                             activeFamilyId = init.familyId;
@@ -1512,91 +1533,136 @@ out center 20;`;
                 e.preventDefault();
                 const isFreeType = logType !== '授乳' && logType !== '睡眠' && logType !== '食事' && logType !== 'おむつ' && logType !== '体調';
                 if (isFreeType && !logNote.trim()) return;
-                setLogLoading(true);
-                setGlobalLoading(true);
-                try {
-                    await runGas('addLog', {
-                        type: logType,
-                        note: buildNote(),
-                        timestamp: combineDateTimeToJst(logDate, logTime),
-                        ...ctx()
-                    });
-                    setLogNote('');
-                    setFoodMenu('');
-                    setSymptoms({
-                        fever: false, cough: false, runnyNose: false,
-                        vomit: false, diarrhea: false, rash: false, badMood: false
-                    });
-                    setLogDate(toDateValue());
-                    setLogTime(toTimeValue());
+
+                const newTimestamp = combineDateTimeToJst(logDate, logTime);
+                const noteText = buildNote();
+                const newLog = {
+                    type: logType,
+                    note: noteText,
+                    timestamp: newTimestamp
+                };
+
+                const previousLogs = [...logs];
+                // 楽観的UI更新
+                setLogs(prev => [newLog, ...prev]);
+
+                // フォーム初期化
+                setLogNote('');
+                setFoodMenu('');
+                setSymptoms({
+                    fever: false, cough: false, runnyNose: false,
+                    vomit: false, diarrhea: false, rash: false, badMood: false
+                });
+                setLogDate(toDateValue());
+                setLogTime(toTimeValue());
+
+                runGas('addLog', {
+                    type: logType,
+                    note: noteText,
+                    timestamp: newTimestamp,
+                    ...ctx()
+                }).then(async () => {
                     const updatedLogs = await runGas('getLogs', ctx());
                     setLogs(updatedLogs || []);
-                    await loadSuggestions();
-                } catch { alert('ログの追加に失敗しました。'); }
-                finally { setLogLoading(false); setGlobalLoading(false); }
+                    loadSuggestions();
+                }).catch((err) => {
+                    console.error(err);
+                    alert('ログの追加に失敗しました。');
+                    setLogs(previousLogs);
+                });
             };
 
             const handleAddGrowth = async (e) => {
                 e.preventDefault();
                 if (!growthHeight && !growthWeight && !growthHead) return;
-                setGrowthLoading(true);
-                setGlobalLoading(true);
-                try {
-                    await runGas('addGrowth', {
-                        height: growthHeight,
-                        weight: growthWeight,
-                        headCircumference: growthHead,
-                        timestamp: combineDateTimeToJst(growthDate, growthTime),
-                        ...ctx()
-                    });
-                    setGrowthHeight('');
-                    setGrowthWeight('');
-                    setGrowthHead('');
-                    setGrowthDate(toDateValue());
-                    setGrowthTime(toTimeValue());
+
+                const newTimestamp = combineDateTimeToJst(growthDate, growthTime);
+                const newGrowth = {
+                    timestamp: newTimestamp,
+                    height: growthHeight,
+                    weight: growthWeight,
+                    head_circumference: growthHead
+                };
+
+                const previousGrowth = [...growthData];
+                // 楽観的UI更新
+                setGrowthData(prev => [newGrowth, ...prev].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+
+                // フォーム初期化
+                setGrowthHeight('');
+                setGrowthWeight('');
+                setGrowthHead('');
+                setGrowthDate(toDateValue());
+                setGrowthTime(toTimeValue());
+
+                runGas('addGrowth', {
+                    height: newGrowth.height,
+                    weight: newGrowth.weight,
+                    headCircumference: newGrowth.head_circumference,
+                    timestamp: newTimestamp,
+                    ...ctx()
+                }).then(async () => {
                     const g = await runGas('getGrowth', ctx());
                     setGrowthData(g || []);
-                } catch { alert('成長記録の登録に失敗しました。'); }
-                finally { setGrowthLoading(false); setGlobalLoading(false); }
+                }).catch((err) => {
+                    console.error(err);
+                    alert('成長記録の登録に失敗しました。');
+                    setGrowthData(previousGrowth);
+                });
             };
 
             const handleDeleteLog = async (item) => {
                 if (!confirm('このログを削除してもよろしいですか？')) return;
-                const idStr = item.timestamp + item.type;
-                setDeletingLogId(idStr);
-                setGlobalLoading(true);
-                try {
-                    await runGas('deleteLog', { timestamp: item.timestamp, type: item.type, ...ctx() });
+                const previousLogs = [...logs];
+                // 楽観的UI更新
+                setLogs(prev => prev.filter(l => !(l.timestamp === item.timestamp && l.type === item.type)));
+
+                runGas('deleteLog', { timestamp: item.timestamp, type: item.type, ...ctx() }).then(async () => {
                     const updatedLogs = await runGas('getLogs', ctx());
                     setLogs(updatedLogs || []);
-                } catch { alert('ログの削除に失敗しました。'); }
-                finally { setDeletingLogId(null); setGlobalLoading(false); }
+                }).catch((err) => {
+                    console.error(err);
+                    alert('ログの削除に失敗しました。');
+                    setLogs(previousLogs);
+                });
             };
 
             const handleEditLogSubmit = async (e) => {
                 e.preventDefault();
                 if (!editingLog) return;
                 setEditingLogSaving(true);
-                setGlobalLoading(true);
-                try {
-                    const newTimestamp = combineDateTimeToJst(editingLog.date, editingLog.time);
-                    await runGas('updateLog', {
-                        oldTimestamp: editingLog.oldTimestamp,
-                        oldType: editingLog.oldType,
-                        newTimestamp: newTimestamp,
-                        newType: editingLog.type,
-                        newNote: editingLog.note,
-                        ...ctx()
-                    });
+                
+                const previousLogs = [...logs];
+                const newTimestamp = combineDateTimeToJst(editingLog.date, editingLog.time);
+                
+                // 楽観的UI更新
+                setLogs(prev => prev.map(l => (l.timestamp === editingLog.oldTimestamp && l.type === editingLog.oldType) ? {
+                    ...l,
+                    timestamp: newTimestamp,
+                    type: editingLog.type,
+                    note: editingLog.note
+                } : l));
+                
+                const targetLog = editingLog;
+                setEditingLog(null);
+
+                runGas('updateLog', {
+                    oldTimestamp: targetLog.oldTimestamp,
+                    oldType: targetLog.oldType,
+                    newTimestamp: newTimestamp,
+                    newType: targetLog.type,
+                    newNote: targetLog.note,
+                    ...ctx()
+                }).then(async () => {
                     const updatedLogs = await runGas('getLogs', ctx());
                     setLogs(updatedLogs || []);
-                    setEditingLog(null);
-                } catch {
+                }).catch((err) => {
+                    console.error(err);
                     alert('ログの更新に失敗しました。');
-                } finally {
+                    setLogs(previousLogs);
+                }).finally(() => {
                     setEditingLogSaving(false);
-                    setGlobalLoading(false);
-                }
+                });
             };
 
             const handleEvaluateSymptom = async (e) => {
@@ -1727,6 +1793,167 @@ out center 20;`;
                 }
                 catch (err) { setChatMessages(prev => [...prev, { sender: 'ai', text: '申し訳ありません、回答を取得できませんでした。原因: ' + err.message }]); }
                 finally { setChatLoading(false); }
+            };
+
+            const handleSaveProfile = async (displayName) => {
+                setMyAccountSaving(true);
+                try {
+                    const res = await runGas('updateUserProfile', { email: userEmail, displayName, ...ctx() });
+                    if (res.status === 'success') {
+                        setUserName(displayName);
+                        localStorage.setItem('user_name', displayName);
+                        const members = await runGas('getFamilyMembers', ctx());
+                        setFamilyMembers(members || []);
+                        setShowMyAccountModal(false);
+                        alert('表示名を変更しました。');
+                    } else {
+                        alert(res.message || 'プロフィールの更新に失敗しました。');
+                    }
+                } catch (e) {
+                    alert('プロフィールの更新に失敗しました。');
+                } finally {
+                    setMyAccountSaving(false);
+                }
+            };
+
+            const handleDeleteGrowth = async (item) => {
+                if (!confirm('この測定記録を削除してもよろしいですか？')) return;
+                const previousGrowth = [...growthData];
+                // 楽観的UI更新
+                setGrowthData(prev => prev.filter(g => g.timestamp !== item.timestamp));
+                try {
+                    await runGas('deleteGrowth', {
+                        timestamp: item.timestamp,
+                        ...ctx()
+                    });
+                    const g = await runGas('getGrowth', ctx());
+                    setGrowthData(g || []);
+                } catch (err) {
+                    console.error(err);
+                    alert('測定記録の削除に失敗しました。');
+                    setGrowthData(previousGrowth);
+                }
+            };
+
+            const handleEditGrowthSubmit = async (e) => {
+                e.preventDefault();
+                if (!editingGrowth) return;
+                setEditingGrowthSaving(true);
+                const previousGrowth = [...growthData];
+                const oldTimestamp = editingGrowth.oldTimestamp;
+                const newTimestamp = combineDateTimeToJst(editingGrowth.date, editingGrowth.time);
+                
+                // 楽観的UI更新
+                setGrowthData(prev => prev.map(g => g.timestamp === oldTimestamp ? {
+                    ...g,
+                    timestamp: newTimestamp,
+                    height: editingGrowth.height,
+                    weight: editingGrowth.weight,
+                    head_circumference: editingGrowth.headCircumference
+                } : g));
+                
+                const targetGrowth = editingGrowth;
+                setEditingGrowth(null);
+                
+                try {
+                    await runGas('updateGrowth', {
+                        oldTimestamp,
+                        newTimestamp,
+                        height: targetGrowth.height,
+                        weight: targetGrowth.weight,
+                        headCircumference: targetGrowth.headCircumference,
+                        ...ctx()
+                    });
+                    const g = await runGas('getGrowth', ctx());
+                    setGrowthData(g || []);
+                } catch (err) {
+                    console.error(err);
+                    alert('測定記録の更新に失敗しました。');
+                    setGrowthData(previousGrowth);
+                } finally {
+                    setEditingGrowthSaving(false);
+                }
+            };
+
+            const handleAskAIAboutPlaces = async () => {
+                let locStr = "";
+                if (userLocation) {
+                    locStr = `(緯度: ${userLocation.lat}, 経度: ${userLocation.lng})`;
+                } else if (addressInput) {
+                    locStr = `(住所: ${addressInput})`;
+                }
+                const prompt = `現在地 ${locStr} の周辺で、子どもと一緒にお出かけできるおすすめの場所や、子連れで楽しむためのポイントを教えてください。`;
+                setActiveTab('chat');
+                handleSendChat(null, prompt);
+            };
+
+            const handleAddCustomMilestone = async (e) => {
+                if (e) e.preventDefault();
+                if (!roadmapCustomTitle.trim()) return;
+                setGlobalLoading(true);
+                try {
+                    await runGas('addMilestone', {
+                        title: roadmapCustomTitle.trim(),
+                        category: roadmapCustomCategory,
+                        familyId
+                    });
+                    setRoadmapCustomTitle('');
+                    const m = await runGas('getMilestones', ctx());
+                    setMilestones(m || []);
+                } catch {
+                    alert('マイルストーンの追加に失敗しました。');
+                } finally {
+                    setGlobalLoading(false);
+                }
+            };
+
+            const handleRequestRoadmapAI = async () => {
+                setRoadmapAiLoading(true);
+                try {
+                    const res = await callGeminiDirectly('getRoadmapSuggestionsPromptAndKey', {
+                        ...ctx(),
+                        prompt: "発達に合わせた目標・タスクを提案してください"
+                    });
+                    
+                    let suggestions = [];
+                    if (typeof res === 'string') {
+                        const cleaned = res.replace(/```json/g, '').replace(/```/g, '').trim();
+                        suggestions = JSON.parse(cleaned);
+                    } else if (Array.isArray(res)) {
+                        suggestions = res;
+                    } else if (res && Array.isArray(res.suggestions)) {
+                        suggestions = res.suggestions;
+                    }
+                    
+                    if (Array.isArray(suggestions)) {
+                        setRoadmapAiSuggestions(suggestions);
+                    } else {
+                        alert('AI提案の解析に失敗しました。再度お試しください。');
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('AI提案の取得に失敗しました。');
+                } finally {
+                    setRoadmapAiLoading(false);
+                }
+            };
+
+            const handleAddSuggestedMilestone = async (suggestion, idx) => {
+                setGlobalLoading(true);
+                try {
+                    await runGas('addMilestone', {
+                        title: suggestion.title,
+                        category: suggestion.category,
+                        familyId
+                    });
+                    setRoadmapAiSuggestions(prev => prev.filter((_, i) => i !== idx));
+                    const m = await runGas('getMilestones', ctx());
+                    setMilestones(m || []);
+                } catch (e) {
+                    alert('マイルストーンの追加に失敗しました。');
+                } finally {
+                    setGlobalLoading(false);
+                }
             };
 
             const handleRequestGPS = () => {
@@ -2040,41 +2267,81 @@ out center 20;`;
                                             {(() => {
                                                 const currentUserRole = familyMembers.find(m => m.email.toLowerCase() === userEmail.toLowerCase())?.role || 'member';
                                                 const isAdmin = currentUserRole === 'admin';
+                                                const admins = familyMembers.filter(m => m.role === 'admin');
+                                                const members = familyMembers.filter(m => m.role !== 'admin');
+                                                
+                                                const renderMemberRow = (m, mi) => {
+                                                    const isMe = m.email.toLowerCase() === userEmail.toLowerCase();
+                                                    const displayNameToShow = m.displayName || m.email;
+                                                    return (
+                                                        <div key={mi} className={`flex justify-between items-center bg-white/80 border rounded-xl px-2.5 py-1.5 text-[11px] ${isMe ? 'border-indigo-300 bg-indigo-50/30' : 'border-indigo-100/50'}`}>
+                                                            {isMe ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setShowMyAccountModal(true)}
+                                                                    className="text-left font-bold text-indigo-700 hover:underline flex items-center gap-1 truncate max-w-[70%]"
+                                                                >
+                                                                    <span>👤 {displayNameToShow} (自分)</span>
+                                                                    <span className="text-[9px] font-normal text-slate-400">⚙️個人設定</span>
+                                                                </button>
+                                                            ) : (
+                                                                <span className="text-slate-700 truncate max-w-[70%]">👤 {displayNameToShow}</span>
+                                                            )}
+                                                            <div className="flex items-center space-x-2">
+                                                                {isAdmin && !isMe && (
+                                                                    <select
+                                                                        value={m.role}
+                                                                        onChange={(e) => handleUpdateMemberRole(m.email, e.target.value)}
+                                                                        className="text-[10px] bg-transparent border-b border-indigo-200 text-indigo-700 focus:outline-none cursor-pointer"
+                                                                    >
+                                                                        <option value="admin">管理者</option>
+                                                                        <option value="member">メンバー</option>
+                                                                    </select>
+                                                                )}
+                                                                {isAdmin && !isMe && (
+                                                                    <button type="button" onClick={() => handleRemoveMember(m.email)} className="text-red-500 hover:text-red-700 font-bold px-1">解除</button>
+                                                                )}
+                                                                {!isAdmin && isMe && (
+                                                                    <button type="button" onClick={() => handleRemoveMember(m.email)} className="text-red-500 hover:text-red-700 font-bold px-1">脱退</button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                };
+
                                                 return (
-                                                    <div className="border-t border-indigo-200/50 pt-2 space-y-2">
+                                                    <div className="border-t border-indigo-200/50 pt-2 space-y-3">
                                                         <div className="font-bold text-slate-600 text-[10px] uppercase flex justify-between">
-                                                            <span>家族連携メンバー（同じデータを見るメンバー）</span>
+                                                            <span>家族連携メンバー</span>
                                                             {!isAdmin && <span className="text-[9px] text-slate-400">※管理操作は管理者のみ可能です</span>}
                                                         </div>
-                                                        <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                                                            {familyMembers.map((m, mi) => (
-                                                                <div key={mi} className="flex justify-between items-center bg-white/80 border border-indigo-100/50 rounded-xl px-2.5 py-1 text-[11px]">
-                                                                    <span className="text-slate-700 truncate">{m.email} {m.role === 'admin' && <span className="text-[9px] bg-indigo-100 text-indigo-700 font-bold px-1 py-0.25 rounded-md ml-1">管理者</span>}</span>
-                                                                    <div className="flex items-center space-x-2">
-                                                                        {isAdmin && m.email.toLowerCase() !== userEmail.toLowerCase() && (
-                                                                            <select
-                                                                                value={m.role}
-                                                                                onChange={(e) => handleUpdateMemberRole(m.email, e.target.value)}
-                                                                                className="text-[10px] bg-transparent border-b border-indigo-200 text-indigo-700 focus:outline-none cursor-pointer"
-                                                                            >
-                                                                                <option value="admin">管理者</option>
-                                                                                <option value="member">メンバー</option>
-                                                                            </select>
-                                                                        )}
-                                                                        {/* 管理者なら他メンバーを解除可能。自分自身はエラーになるため非表示にするか、別途「家族から抜ける」を設けるかだが、既存に合わせて自分以外とする */}
-                                                                        {isAdmin && m.email.toLowerCase() !== userEmail.toLowerCase() && (
-                                                                            <button type="button" onClick={() => handleRemoveMember(m.email)} className="text-red-500 hover:text-red-700 font-bold px-1">解除</button>
-                                                                        )}
-                                                                        {/* メンバーが自分自身を解除（脱退）する場合は許容する */}
-                                                                        {!isAdmin && m.email.toLowerCase() === userEmail.toLowerCase() && (
-                                                                            <button type="button" onClick={() => handleRemoveMember(m.email)} className="text-red-500 hover:text-red-700 font-bold px-1">抜ける</button>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            ))}
+                                                        
+                                                        {/* 管理者一覧 */}
+                                                        <div className="space-y-1.5">
+                                                            <div className="text-[10px] font-bold text-slate-400 pl-1">👑 管理者 ({admins.length})</div>
+                                                            <div className="space-y-1.5 max-h-24 overflow-y-auto pr-1">
+                                                                {admins.length === 0 ? (
+                                                                    <div className="text-slate-400 text-[10px] pl-1">管理者が存在しません</div>
+                                                                ) : (
+                                                                    admins.map((m, mi) => renderMemberRow(m, `admin-${mi}`))
+                                                                )}
+                                                            </div>
                                                         </div>
+
+                                                        {/* メンバー一覧 */}
+                                                        <div className="space-y-1.5 pt-1">
+                                                            <div className="text-[10px] font-bold text-slate-400 pl-1">👥 一般メンバー ({members.length})</div>
+                                                            <div className="space-y-1.5 max-h-24 overflow-y-auto pr-1">
+                                                                {members.length === 0 ? (
+                                                                    <div className="text-slate-400 text-[10px] pl-1">メンバーが存在しません</div>
+                                                                ) : (
+                                                                    members.map((m, mi) => renderMemberRow(m, `member-${mi}`))
+                                                                )}
+                                                            </div>
+                                                        </div>
+
                                                         {isAdmin && (
-                                                            <div className="flex gap-1.5 pt-1">
+                                                            <div className="flex gap-1.5 pt-1.5 border-t border-indigo-100/50">
                                                                 <input type="email" value={newMemberEmail} onChange={e => setNewMemberEmail(e.target.value)} placeholder="追加するGoogleメールアドレス"
                                                                     className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                                 <button type="button" onClick={handleAddMember} disabled={memberLoading} className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl disabled:opacity-50">追加</button>
@@ -2159,45 +2426,176 @@ out center 20;`;
                                         </div>
                                     </div>
                                     </div>
-
-                                    {/* --- User設定 --- */}
-                                    <div className="space-y-3">
-                                        <h4 className="font-bold text-slate-800 text-sm border-b pb-1 border-slate-200">User設定</h4>
-                                        {/* ユーザープロフィール設定 */}
-                                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-2">
-                                        <label className="text-[10px] font-bold text-slate-400 uppercase">パパ/ママの表示名</label>
-                                        <input type="text" value={userName} onChange={e => setUserName(e.target.value)} placeholder="例）パパ、ママ、お名前"
-                                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                                    </div>
-                                        {/* Google認証設定（ログアウト） */}
-                                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3.5 space-y-3">
-                                        <label className="text-[10px] font-bold text-slate-400 uppercase block">Google認証設定</label>
-                                        {googleClientId && (
-                                            <div className="text-[10px] text-slate-400 truncate">
-                                                設定中のクライアントID: {googleClientId.substring(0, 15)}...
-                                            </div>
-                                        )}
-                                        <div className="pt-1">
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    if (confirm('ログアウトしますか？')) {
-                                                        handleLogout();
-                                                        setShowSettings(false);
-                                                    }
-                                                }}
-                                                className="w-full py-2 bg-red-50 border border-red-100 hover:bg-red-100 text-red-600 font-bold rounded-xl transition-all text-xs"
-                                            >
-                                                Google アカウントからログアウト
-                                            </button>
-                                        </div>
-                                    </div>
-                                    </div>
                                     <div className="flex gap-2.5 pt-2 border-t">
                                         <button type="button" onClick={() => setShowSettings(false)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl">閉じる</button>
                                         <button type="button" onClick={handleSaveSettings} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-md">設定を保存</button>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showMyAccountModal && (
+                        <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={() => setShowMyAccountModal(false)}>
+                            <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
+                                <div className="flex justify-between items-center border-b pb-2">
+                                    <h3 className="font-bold text-slate-800 text-base">個人設定</h3>
+                                    <button onClick={() => setShowMyAccountModal(false)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+                                </div>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase">メールアドレス</label>
+                                        <div className="text-xs text-slate-600 font-mono select-all bg-slate-50 p-2 rounded-xl border border-slate-100 mt-1">{userEmail}</div>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase">表示名（パパ/ママ名など）</label>
+                                        <input
+                                            type="text"
+                                            value={userName}
+                                            onChange={e => setUserName(e.target.value)}
+                                            placeholder="例）パパ、ママ、お名前"
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 mt-1"
+                                        />
+                                    </div>
+                                    <div className="pt-2">
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                setMyAccountSaving(true);
+                                                try {
+                                                    await handleSaveProfile(userName);
+                                                } finally {
+                                                    setMyAccountSaving(false);
+                                                }
+                                            }}
+                                            disabled={myAccountSaving}
+                                            className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition disabled:opacity-50 text-xs shadow-md"
+                                        >
+                                            {myAccountSaving ? '保存中...' : '表示名を保存'}
+                                        </button>
+                                    </div>
+                                    <div className="pt-1 border-t border-slate-100">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (confirm('ログアウトしますか？')) {
+                                                    handleLogout();
+                                                    setShowMyAccountModal(false);
+                                                    setShowSettings(false);
+                                                }
+                                            }}
+                                            className="w-full py-2 bg-red-50 border border-red-100 hover:bg-red-100 text-red-600 font-bold rounded-xl transition text-xs"
+                                        >
+                                            Google アカウントからログアウト
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showAllGrowth && (
+                        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 animate-fade-in" onClick={() => setShowAllGrowth(false)}>
+                            <div className="bg-white rounded-3xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
+                                <div className="flex justify-between items-center border-b pb-3">
+                                    <h3 className="font-bold text-slate-800 text-base">成長記録 測定履歴（全件）</h3>
+                                    <button onClick={() => setShowAllGrowth(false)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+                                </div>
+                                <div className="space-y-2">
+                                    {growthData.length === 0 ? (
+                                        <div className="text-center py-6 text-slate-400 text-xs">データがありません。</div>
+                                    ) : (
+                                        [...growthData].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).map((g, idx) => (
+                                            <div key={idx} className="flex justify-between items-center bg-slate-50 border border-slate-100 rounded-xl p-3 text-xs">
+                                                <div className="space-y-1">
+                                                    <div className="font-mono text-[10px] text-slate-400">{g.timestamp}</div>
+                                                    <div className="flex space-x-3 text-slate-700 font-bold">
+                                                        {g.height && <span>📏 {g.height}cm</span>}
+                                                        {g.weight && <span>⚖️ {g.weight}kg</span>}
+                                                        {g.head_circumference && <span>🧠 {g.head_circumference}cm</span>}
+                                                    </div>
+                                                </div>
+                                                <div className="flex space-x-1 shrink-0">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const parts = g.timestamp.split(' ');
+                                                            const dateVal = parts[0].replace(/\//g, '-');
+                                                            const timeVal = parts[1] ? parts[1].substring(0, 5) : '00:00';
+                                                            setEditingGrowth({
+                                                                oldTimestamp: g.timestamp,
+                                                                date: dateVal,
+                                                                time: timeVal,
+                                                                height: g.height || '',
+                                                                weight: g.weight || '',
+                                                                headCircumference: g.head_circumference || ''
+                                                            });
+                                                        }}
+                                                        className="px-2 py-1 bg-indigo-50 border border-indigo-100 text-indigo-600 font-bold rounded-lg hover:bg-indigo-100 transition text-[10px]"
+                                                    >
+                                                        編集
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleDeleteGrowth(g)}
+                                                        className="px-2 py-1 bg-red-50 border border-red-100 text-red-600 font-bold rounded-lg hover:bg-red-100 transition text-[10px]"
+                                                    >
+                                                        削除
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                                <div className="pt-2 border-t text-right">
+                                    <button type="button" onClick={() => setShowAllGrowth(false)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs">閉じる</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {editingGrowth && (
+                        <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4 animate-scale-up" onClick={() => setEditingGrowth(null)}>
+                            <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-4" onClick={e => e.stopPropagation()}>
+                                <div className="flex justify-between items-center border-b pb-2">
+                                    <h3 className="font-bold text-slate-800 text-base">測定記録を編集</h3>
+                                    <button onClick={() => setEditingGrowth(null)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+                                </div>
+                                <form onSubmit={handleEditGrowthSubmit} className="space-y-3 text-xs">
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">測定日時</label>
+                                        <div className="flex space-x-2">
+                                            <input type="date" value={editingGrowth.date} onChange={e => setEditingGrowth(prev => ({ ...prev, date: e.target.value }))}
+                                                className="w-[55%] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700" required />
+                                            <input type="time" value={editingGrowth.time} onChange={e => setEditingGrowth(prev => ({ ...prev, time: e.target.value }))}
+                                                className="w-[45%] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700" required />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 block mb-1">身長 (cm)</label>
+                                            <input type="number" step="0.1" min="30" max="150" value={editingGrowth.height} onChange={e => setEditingGrowth(prev => ({ ...prev, height: e.target.value }))}
+                                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 font-semibold text-slate-800" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 block mb-1">体重 (kg)</label>
+                                            <input type="number" step="0.01" min="1" max="40" value={editingGrowth.weight} onChange={e => setEditingGrowth(prev => ({ ...prev, weight: e.target.value }))}
+                                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 font-semibold text-slate-800" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 block mb-1">頭囲 (cm)</label>
+                                            <input type="number" step="0.1" min="20" max="70" value={editingGrowth.headCircumference} onChange={e => setEditingGrowth(prev => ({ ...prev, headCircumference: e.target.value }))}
+                                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 font-semibold text-slate-800" />
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2 pt-2 border-t">
+                                        <button type="button" onClick={() => setEditingGrowth(null)} className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl">キャンセル</button>
+                                        <button type="submit" disabled={editingGrowthSaving || (!editingGrowth.height && !editingGrowth.weight && !editingGrowth.headCircumference)}
+                                            className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md disabled:opacity-50">
+                                            {editingGrowthSaving ? '保存中...' : '変更を保存'}
+                                        </button>
+                                    </div>
+                                </form>
                             </div>
                         </div>
                     )}
@@ -2501,207 +2899,10 @@ out center 20;`;
 
                         {/* ======================== FACILITIES MAP ======================== */}
                         {activeTab === 'facilities' && (
-                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start animate-fade-in">
-                                {/* 左カラム：検索と施設リスト */}
-                                <div className="lg:col-span-5 space-y-4 lg:max-h-[calc(100vh-180px)] lg:overflow-y-auto custom-scrollbar lg:pr-2">
-                                    {/* Search & Filter */}
-                                    <div className="bg-white/80 border border-slate-100 rounded-2xl p-4 shadow-sm space-y-3">
-                                        <div className="relative">
-                                            <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                                                placeholder="施設名・住所で絞り込み…"
-                                                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 transition-all" />
-                                            <div className="absolute left-3 top-2.5 text-slate-400"><Icon.Search /></div>
-                                        </div>
-                                        <div className="flex space-x-1 overflow-x-auto custom-scrollbar pb-0.5">
-                                            {[
-                                                { key: 'all', label: 'すべて' },
-                                                ...Object.entries(FAC_TYPES).map(([k, v]) => ({ key: k, label: v.emoji + ' ' + v.label }))
-                                            ].map(({ key, label }) => (
-                                                <button key={key} onClick={() => setFacFilter(key)}
-                                                    className={`whitespace-nowrap px-3 py-1 text-xs font-bold rounded-lg border transition-all ${facFilter === key ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                                                    {label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    {/* GPS error fallback */}
-                                    {gpsError && (
-                                        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2.5 shadow-sm">
-                                            <div className="flex items-center space-x-2">
-                                                <span className="text-amber-600 text-lg">⚠️</span>
-                                                <div>
-                                                    <p className="text-xs font-bold text-amber-800">GPS取得に失敗しました</p>
-                                                    <p className="text-[11px] text-amber-600">代わりに住所で検索できます</p>
-                                                </div>
-                                            </div>
-                                            <form onSubmit={handleAddressSearch} className="flex space-x-2">
-                                                <input
-                                                    type="text"
-                                                    value={addressInput}
-                                                    onChange={e => setAddressInput(e.target.value)}
-                                                    placeholder="例: 東京都渋谷区代々木公園"
-                                                    className="flex-1 bg-white border border-amber-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 transition-all"
-                                                />
-                                                <button type="submit" disabled={addressLoading || !addressInput.trim()}
-                                                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 text-white text-xs font-bold rounded-xl transition-all flex items-center space-x-1">
-                                                    {addressLoading
-                                                        ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                        : <span>検索</span>}
-                                                </button>
-                                            </form>
-                                        </div>
-                                    )}
-
-                                    {/* TOP3 recommendations */}
-                                    {displayFacilities.length > 0 && (() => {
-                                        const top3 = [...displayFacilities]
-                                            .sort((a, b) => calcChildScore(b) - calcChildScore(a))
-                                            .slice(0, 3);
-                                        return (
-                                            <div className="bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-2xl p-4 shadow-sm space-y-3">
-                                                <h3 className="text-xs font-bold text-indigo-700 uppercase tracking-wider flex items-center space-x-1">
-                                                    <span>⭐</span><span>子連れにおすすめ TOP3</span>
-                                                </h3>
-                                                {top3.map((f, i) => {
-                                                    const cfg = FAC_TYPES[f.type] || FAC_TYPES.shop;
-                                                    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.name + ' ' + f.address)}`;
-                                                    const medals = ['🥇', '🥈', '🥉'];
-                                                    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(f.name + ' ベビーカー おむつ替え 授乳室 子連れ')}`;
-                                                    return (
-                                                        <div key={i} className="flex items-start space-x-3 bg-white/80 rounded-xl p-3 border border-indigo-100">
-                                                            <span className="text-xl shrink-0 mt-0.5">{medals[i]}</span>
-                                                            <div className="flex-1 min-w-0">
-                                                                <div className="flex items-center space-x-1.5 mb-0.5">
-                                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md border ${cfg.bg} ${cfg.text} ${cfg.border}`}>{cfg.emoji} {cfg.label}</span>
-                                                                </div>
-                                                                <p className="font-bold text-slate-800 text-sm leading-snug truncate">{f.name}</p>
-                                                                <p className="text-[10px] text-slate-500 truncate">{f.address}</p>
-                                                                {(f.childFriendlyTags || []).length > 0 && (
-                                                                    <div className="flex flex-wrap gap-1 mt-1">
-                                                                        {f.childFriendlyTags.map((tag, ti) => (
-                                                                            <span key={ti} className="text-[9px] bg-green-50 border border-green-200 text-green-700 font-bold px-1.5 py-0.5 rounded-full">✓ {tag}</span>
-                                                                        ))}
-                                                                    </div>
-                                                                )}
-                                                                <a href={searchUrl} target="_blank" rel="noopener noreferrer"
-                                                                    className="mt-1.5 inline-flex items-center space-x-1 text-[10px] font-bold text-orange-600 bg-orange-50 border border-orange-200 px-2 py-1 rounded-lg hover:bg-orange-100 transition-colors">
-                                                                    <span>🔍</span><span>ベビーカー・授乳室を検索</span>
-                                                                </a>
-                                                            </div>
-                                                            <a href={mapsUrl} target="_blank" className="p-2 bg-green-50 hover:bg-green-100 text-green-600 rounded-xl border border-green-100 shrink-0">
-                                                                <Icon.Loc />
-                                                            </a>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        );
-                                    })()}
-
-                                    {/* Facility List Cards */}
-                                    <div className="space-y-2.5">
-                                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">{filteredFac.length}件の施設</h3>
-                                        {filteredFac.length === 0
-                                            ? <div className="text-center py-6 text-slate-400 text-sm border border-dashed border-slate-200 rounded-2xl">
-                                                {userLocation ? '該当する施設が見つかりません' : '「現在地」ボタンで近くの施設を検索できます'}
-                                            </div>
-                                            : filteredFac.map((f, idx) => {
-                                                const cfg = FAC_TYPES[f.type] || FAC_TYPES.shop;
-                                                const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.name + ' ' + f.address)}`;
-                                                const defaultChildInfo = {
-                                                    park: { age: '0歳〜', fee: '無料', icon: '🌳', tip: 'ピクニック・外遊びにおすすめ' },
-                                                    community: { age: '0歳〜就学前', fee: '無料〜低額', icon: '🏠', tip: '地域の子育て支援あり' },
-                                                    baby_room: { age: '全年齢', fee: '無料', icon: '🤱', tip: '授乳・オムツ替え可能' },
-                                                    hospital: { age: '全年齢', fee: '保険適用', icon: '🏥', tip: '小児救急・夜間対応を確認' },
-                                                    daycare: { age: '0〜5歳', fee: '認可料金', icon: '🍼', tip: '一時保育の利用も確認' },
-                                                    restaurant: { age: '0歳〜', fee: '食事代', icon: '🍴', tip: '子ども椅子・メニューを事前確認推奨' },
-                                                    shop: { age: '0歳〜', fee: '商品代', icon: '🛒', tip: 'ベビー用品・子ども服の取扱いを確認' },
-                                                };
-                                                const info = defaultChildInfo[f.type] || defaultChildInfo.shop;
-                                                const childTags = f.childFriendlyTags || [];
-                                                const childSearchKeywords = {
-                                                    park: 'ベビーカー 遊具 子連れ',
-                                                    community: 'ベビーカー おむつ替え 授乳室 子連れ',
-                                                    baby_room: '授乳室 おむつ替え 場所',
-                                                    hospital: '小児科 夜間 救急 子供',
-                                                    daycare: '一時保育 空き 料金',
-                                                    restaurant: 'ベビーカー 入れる 子連れ ハイチェア',
-                                                    shop: 'ベビーカー 入れる 子供用品',
-                                                };
-                                                const searchKw = childSearchKeywords[f.type] || 'ベビーカー 子連れ';
-                                                const childSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(f.name + ' ' + searchKw)}`;
-                                                return (
-                                                    <div key={idx} className={`bg-white border ${cfg.border} rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow space-y-2.5`}>
-                                                        <div className="flex justify-between items-start gap-2">
-                                                            <div className="flex-1 min-w-0">
-                                                                <div className="flex items-center space-x-1.5 mb-1">
-                                                                    <span className={`inline-block px-2 py-0.5 text-[10px] font-bold rounded-md border ${cfg.bg} ${cfg.text} ${cfg.border}`}>{cfg.emoji} {cfg.label}</span>
-                                                                    <span className="text-[9px] text-slate-400">{f.source === 'google_places' ? 'Google' : 'OSM'}</span>
-                                                                </div>
-                                                                <h3 className="font-bold text-slate-800 leading-snug">{f.name}</h3>
-                                                                <p className="text-xs text-slate-500 mt-0.5">{f.address}</p>
-                                                            </div>
-                                                            <div className="flex flex-col space-y-1.5 shrink-0">
-                                                                {f.phone && (
-                                                                    <button
-                                                                        onClick={() => setCallConfirm({
-                                                                            number: f.phone,
-                                                                            label: f.name,
-                                                                            emoji: '📞',
-                                                                            description: 'お出かけ先への電話発信です。営業時間や混雑状況などをご確認ください。'
-                                                                        })}
-                                                                        className="p-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl transition-colors border border-indigo-100 active:scale-95 transition-all"
-                                                                    >
-                                                                        <Icon.Phone />
-                                                                    </button>
-                                                                )}
-                                                                <button onClick={(e) => { e.preventDefault(); setSelectedFacility(f); window.scrollTo({top:0, behavior:'smooth'}); }} className="p-2 bg-green-50 hover:bg-green-100 text-green-600 rounded-xl transition-colors border border-green-100">
-                                                                    <Icon.Loc />
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5 space-y-1.5">
-                                                            <div className="flex items-center space-x-1.5 text-[11px] text-slate-600 font-semibold">
-                                                                <span>{info.icon}</span>
-                                                                <span className="text-slate-400">対象:</span><span>{info.age}</span>
-                                                                <span className="mx-1 text-slate-300">|</span>
-                                                                <span className="text-slate-400">料金:</span><span>{info.fee}</span>
-                                                            </div>
-                                                            <p className="text-[10px] text-slate-500">{info.tip}</p>
-                                                            {childTags.length > 0 && (
-                                                                <div className="flex flex-wrap gap-1 pt-0.5">
-                                                                    {childTags.map((tag, ti) => (
-                                                                        <span key={ti} className="text-[9px] bg-green-50 border border-green-200 text-green-700 font-bold px-1.5 py-0.5 rounded-full">✓ {tag}</span>
-                                                                    ))}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                        <a href={childSearchUrl} target="_blank" rel="noopener noreferrer"
-                                                            className="flex items-center justify-center space-x-1.5 w-full py-2 text-[11px] font-bold text-orange-700 bg-orange-50 border border-orange-200 rounded-xl hover:bg-orange-100 transition-colors">
-                                                            <span>🔍</span>
-                                                            <span>「{f.name}」の子連れ情報をWeb検索</span>
-                                                        </a>
-                                                    </div>
-                                                );
-                                            })
-                                        }
-                                    </div>
-                                </div>
-
-                                {/* 右カラム：地図 (Sticky) */}
-                                {/* マップ (モバイルでは上部、PCでは右) */}
-                                <div className="lg:col-span-7 lg:sticky lg:top-24 space-y-3 order-first lg:order-last">
-                                    <div className="flex items-center justify-between">
-                                        <p className="text-[11px] text-slate-500">周辺施設の位置情報を地図上で確認できます。</p>
-                                        {facilitiesLoading && (
-                                            <div className="text-xs text-indigo-600 flex items-center space-x-1.5">
-                                                <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
-                                                <span>検索中…</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                    {/* Leaflet Map */}
+                            <div className="relative w-full h-[calc(100vh-140px)] rounded-3xl overflow-hidden border border-slate-200 shadow-lg animate-fade-in">
+                                
+                                {/* Background Leaflet Map */}
+                                <div className="absolute inset-0 z-0 w-full h-full">
                                     <FacilityMap
                                         facilities={displayFacilities.filter(f => facFilter === 'all' || f.type === facFilter)}
                                         userLocation={userLocation}
@@ -2709,6 +2910,188 @@ out center 20;`;
                                         onRequestGPS={handleRequestGPS}
                                         gpsLoading={gpsLoading}
                                     />
+                                </div>
+
+                                {/* Floating Header: Search & Filter */}
+                                <div className="absolute top-4 left-4 right-4 z-10 max-w-md mx-auto space-y-2 pointer-events-none">
+                                    <div className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl p-3.5 shadow-xl pointer-events-auto space-y-2">
+                                        <div className="flex gap-2">
+                                            <div className="relative flex-1">
+                                                <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                                                    placeholder="施設名・住所で絞り込み…"
+                                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                                                <div className="absolute left-3 top-2 text-slate-400"><Icon.Search className="w-3.5 h-3.5" /></div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleAskAIAboutPlaces}
+                                                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shrink-0 flex items-center space-x-1 shadow-md transition active:scale-95"
+                                            >
+                                                <span>🤖</span><span>AI提案</span>
+                                            </button>
+                                        </div>
+                                        <div className="flex space-x-1 overflow-x-auto custom-scrollbar pb-0.5 pointer-events-auto">
+                                            {[
+                                                { key: 'all', label: 'すべて' },
+                                                ...Object.entries(FAC_TYPES).map(([k, v]) => ({ key: k, label: v.emoji + ' ' + v.label }))
+                                            ].map(({ key, label }) => (
+                                                <button key={key} onClick={() => setFacFilter(key)}
+                                                    className={`whitespace-nowrap px-2.5 py-1 text-[10px] font-bold rounded-lg border transition-all ${facFilter === key ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                                                    {label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Floating GPS error panel */}
+                                    {gpsError && (
+                                        <div className="bg-amber-50/95 backdrop-blur-md border border-amber-200 rounded-2xl p-3 shadow-xl pointer-events-auto space-y-2">
+                                            <div className="flex items-center space-x-2 text-[10px]">
+                                                <span className="text-amber-600">⚠️</span>
+                                                <p className="font-bold text-amber-800">GPS失敗。住所を入力してください</p>
+                                            </div>
+                                            <form onSubmit={handleAddressSearch} className="flex space-x-2">
+                                                <input
+                                                    type="text"
+                                                    value={addressInput}
+                                                    onChange={e => setAddressInput(e.target.value)}
+                                                    placeholder="例: 東京都渋谷区代々木公園"
+                                                    className="flex-1 bg-white border border-amber-300 rounded-xl px-2.5 py-1.5 text-xs focus:outline-none"
+                                                />
+                                                <button type="submit" disabled={addressLoading || !addressInput.trim()}
+                                                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 text-white text-xs font-bold rounded-xl transition">
+                                                    {addressLoading ? '...' : '検索'}
+                                                </button>
+                                            </form>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Floating Buttons: Bottom Right Controls */}
+                                <div className="absolute bottom-4 right-4 z-10 flex flex-col space-y-2 pointer-events-auto">
+                                    <button
+                                        type="button"
+                                        onClick={handleRequestGPS}
+                                        disabled={gpsLoading}
+                                        className="p-3 bg-white/90 backdrop-blur-sm hover:bg-white text-indigo-600 rounded-full border border-slate-200 shadow-lg active:scale-95 transition-all"
+                                    >
+                                        {gpsLoading ? (
+                                            <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                                        ) : (
+                                            <Icon.Loc className="w-5 h-5" />
+                                        )}
+                                    </button>
+                                    
+                                    {selectedFacility && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedFacility(null)}
+                                            className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-full border border-indigo-500 shadow-lg flex items-center space-x-1.5 transition active:scale-95"
+                                        >
+                                            <span>🗺️</span><span>Mapに戻る</span>
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* Floating Footer Card: Selected Facility Detail or TOP1 Recommendation or Slider */}
+                                <div className="absolute bottom-4 left-4 right-16 z-10 max-w-md pointer-events-none">
+                                    {selectedFacility ? (() => {
+                                        const f = selectedFacility;
+                                        const cfg = FAC_TYPES[f.type] || FAC_TYPES.shop;
+                                        const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.name + ' ' + f.address)}`;
+                                        
+                                        const defaultChildInfo = {
+                                            park: { age: '0歳〜', fee: '無料', icon: '🌳', tip: 'ピクニック・外遊びにおすすめ' },
+                                            community: { age: '0歳〜就学前', fee: '無料〜低額', icon: '🏠', tip: '地域の子育て支援あり' },
+                                            baby_room: { age: '全年齢', fee: '無料', icon: '🤱', tip: '授乳・オムツ替え可能' },
+                                            hospital: { age: '全年齢', fee: '保険適用', icon: '🏥', tip: '小児救急・夜間対応を確認' },
+                                            daycare: { age: '0〜5歳', fee: '認可料金', icon: '🍼', tip: '一時保育の利用も確認' },
+                                            restaurant: { age: '0歳〜', fee: '食事代', icon: '🍴', tip: '子ども椅子・メニューを事前確認推奨' },
+                                            shop: { age: '0歳〜', fee: '商品代', icon: '🛒', tip: 'ベビー用品・子ども服の取扱いを確認' },
+                                        };
+                                        const info = defaultChildInfo[f.type] || defaultChildInfo.shop;
+                                        const childTags = f.childFriendlyTags || [];
+                                        const childSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(f.name + ' ベビーカー 授乳室 子連れ')}`;
+
+                                        return (
+                                            <div className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl p-4 shadow-2xl pointer-events-auto space-y-2 max-h-[40vh] overflow-y-auto custom-scrollbar animate-scale-up">
+                                                <div className="flex justify-between items-start gap-2">
+                                                    <div className="min-w-0">
+                                                        <div className="flex items-center space-x-1.5 mb-1">
+                                                            <span className={`inline-block px-1.5 py-0.5 text-[9px] font-bold rounded border ${cfg.bg} ${cfg.text} ${cfg.border}`}>{cfg.emoji} {cfg.label}</span>
+                                                        </div>
+                                                        <h3 className="font-bold text-slate-800 text-sm leading-snug">{f.name}</h3>
+                                                        <p className="text-[10px] text-slate-500 truncate">{f.address}</p>
+                                                    </div>
+                                                    <div className="flex space-x-1 shrink-0">
+                                                        {f.phone && (
+                                                            <button
+                                                                onClick={() => setCallConfirm({
+                                                                    number: f.phone,
+                                                                    label: f.name,
+                                                                    emoji: '📞',
+                                                                    description: '営業時間や混雑状況などをご確認ください。'
+                                                                })}
+                                                                className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg border border-indigo-100"
+                                                            >
+                                                                <Icon.Phone className="w-3.5 h-3.5" />
+                                                            </button>
+                                                        )}
+                                                        <a href={mapsUrl} target="_blank" className="p-1.5 bg-green-50 text-green-600 rounded-lg border border-green-100">
+                                                            <Icon.Loc className="w-3.5 h-3.5" />
+                                                        </a>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div className="bg-slate-50 border border-slate-100 rounded-xl p-2 text-[10px] space-y-1">
+                                                    <div className="flex items-center space-x-1.5 text-slate-600 font-semibold">
+                                                        <span>{info.icon}</span>
+                                                        <span>対象: {info.age} | 料金: {info.fee}</span>
+                                                    </div>
+                                                    <p className="text-slate-500">{info.tip}</p>
+                                                    {childTags.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1 pt-0.5">
+                                                            {childTags.map((tag, ti) => (
+                                                                <span key={ti} className="text-[8px] bg-green-50 border border-green-200 text-green-700 font-bold px-1 py-0.25 rounded-full">✓ {tag}</span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <a href={childSearchUrl} target="_blank" rel="noopener noreferrer"
+                                                    className="flex items-center justify-center space-x-1.5 w-full py-1.5 text-[10px] font-bold text-orange-700 bg-orange-50 border border-orange-200 rounded-xl hover:bg-orange-100 transition-colors">
+                                                    <span>🔍</span><span>子連れ情報をWeb検索</span>
+                                                </a>
+                                            </div>
+                                        );
+                                    })() : filteredFac.length > 0 ? (
+                                        <div className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl p-3 shadow-xl pointer-events-auto space-y-2">
+                                            <div className="flex justify-between items-center">
+                                                <span className="text-[10px] font-bold text-slate-400">{filteredFac.length}件の施設（スワイプで選択）</span>
+                                            </div>
+                                            <div className="flex space-x-2 overflow-x-auto custom-scrollbar pb-1 snap-x">
+                                                {filteredFac.slice(0, 10).map((f, i) => {
+                                                    const cfg = FAC_TYPES[f.type] || FAC_TYPES.shop;
+                                                    return (
+                                                        <div
+                                                            key={i}
+                                                            onClick={() => setSelectedFacility(f)}
+                                                            className="min-w-[200px] max-w-[200px] bg-slate-50 border border-slate-100 hover:border-indigo-300 rounded-xl p-2.5 snap-start cursor-pointer text-left transition-colors"
+                                                        >
+                                                            <div className="flex items-center space-x-1 mb-0.5">
+                                                                <span className="text-[9px] font-bold text-slate-500">{cfg.emoji} {cfg.label}</span>
+                                                            </div>
+                                                            <p className="font-bold text-slate-800 text-xs truncate leading-snug">{f.name}</p>
+                                                            <p className="text-[9px] text-slate-400 truncate">{f.address}</p>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl p-3 shadow-xl pointer-events-auto text-center text-xs text-slate-400">
+                                            {userLocation ? '表示できる施設がありません。' : '「現在地」または検索で施設を見つけましょう。'}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -2765,11 +3148,22 @@ out center 20;`;
                                     </div>
 
                                     <div>
-                                        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">測定履歴</h2>
+                                        <div className="flex justify-between items-center mb-2">
+                                            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">測定履歴</h2>
+                                            {growthData.length > 0 && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowAllGrowth(true)}
+                                                    className="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors"
+                                                >
+                                                    すべて見る
+                                                </button>
+                                            )}
+                                        </div>
                                         <div className="space-y-2 max-h-48 lg:max-h-[calc(100vh-320px)] overflow-y-auto custom-scrollbar pr-0.5">
                                             {growthData.length === 0
                                                 ? <div className="text-center py-6 text-slate-400 text-sm border border-dashed border-slate-200 rounded-2xl">履歴データがありません</div>
-                                                : [...growthData].reverse().map((g, idx) => (
+                                                : [...growthData].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 5).map((g, idx) => (
                                                     <div key={idx} className="flex justify-between items-center bg-white/70 border border-slate-100 rounded-xl p-3 shadow-sm text-sm">
                                                         <span className="font-mono text-xs text-slate-400">{g.timestamp.split(' ')[0]}</span>
                                                         <div className="flex space-x-3 text-slate-700 font-bold">
@@ -2897,6 +3291,94 @@ out center 20;`;
                                                 );
                                             })}
                                         </div>
+                                    </div>
+
+                                    {/* 手動マイルストーン追加 */}
+                                    <div className="bg-white/80 border border-slate-100 rounded-2xl p-4 shadow-sm space-y-3">
+                                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">目標・タスクを手動で追加する</h4>
+                                        <form onSubmit={handleAddCustomMilestone} className="flex flex-col md:flex-row gap-2">
+                                            <input
+                                                type="text"
+                                                value={roadmapCustomTitle}
+                                                onChange={e => setRoadmapCustomTitle(e.target.value)}
+                                                placeholder="例）コップを使って自分で飲む"
+                                                className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                                                required
+                                            />
+                                            <select
+                                                value={roadmapCustomCategory}
+                                                onChange={e => setRoadmapCustomCategory(e.target.value)}
+                                                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 focus:outline-none"
+                                            >
+                                                <option value="0-3m">0〜3ヶ月</option>
+                                                <option value="3-6m">3〜6ヶ月</option>
+                                                <option value="6-9m">6〜9ヶ月</option>
+                                                <option value="9-12m">9〜12ヶ月</option>
+                                                <option value="1y">1歳〜</option>
+                                                <option value="1.5y">1歳半〜</option>
+                                                <option value="2y">2歳〜</option>
+                                                <option value="2.5y">2歳半〜</option>
+                                                <option value="3y">3歳〜</option>
+                                                <option value="4-5y">4〜5歳</option>
+                                                <option value="6y">6歳〜</option>
+                                            </select>
+                                            <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shrink-0 transition shadow-sm">
+                                                追加する
+                                            </button>
+                                        </form>
+                                    </div>
+
+                                    {/* AI成長目標提案 */}
+                                    <div className="bg-white/80 border border-slate-100 rounded-2xl p-4 shadow-sm space-y-3">
+                                        <div className="flex justify-between items-center">
+                                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">AIによる成長ステップの提案</h4>
+                                            <button
+                                                type="button"
+                                                onClick={handleRequestRoadmapAI}
+                                                disabled={roadmapAiLoading}
+                                                className="px-3 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold rounded-xl text-[10px] hover:bg-indigo-100 transition disabled:opacity-50 flex items-center space-x-1"
+                                            >
+                                                {roadmapAiLoading ? (
+                                                    <>
+                                                        <div className="w-2.5 h-2.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mr-1" />
+                                                        <span>提案生成中...</span>
+                                                    </>
+                                                ) : (
+                                                    <span>💡 AIに成長ステップを提案してもらう</span>
+                                                )}
+                                            </button>
+                                        </div>
+                                        
+                                        {roadmapAiSuggestions.length > 0 && (
+                                            <div className="space-y-2 border-t pt-3">
+                                                <div className="text-[10px] text-slate-400 font-semibold mb-1">AIからの提案（賛同するものをロードマップに追加できます）：</div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                    {roadmapAiSuggestions.map((s, idx) => (
+                                                        <div key={idx} className="flex justify-between items-center bg-slate-50 border border-slate-150 rounded-xl p-2.5 text-xs">
+                                                            <div className="space-y-0.5 max-w-[70%]">
+                                                                <div className="font-bold text-slate-700 truncate">{s.title}</div>
+                                                                <div className="text-[9px] text-slate-400">
+                                                                    カテゴリ: {
+                                                                        {
+                                                                            '0-3m': '0〜3ヶ月', '3-6m': '3〜6ヶ月', '6-9m': '6〜9ヶ月', '9-12m': '9〜12ヶ月',
+                                                                            '1y': '1歳〜', '1.5y': '1歳半〜', '2y': '2歳〜', '2.5y': '2歳半〜',
+                                                                            '3y': '3歳〜', '4-5y': '4〜5歳', '6y': '6歳〜'
+                                                                        }[s.category] || s.category
+                                                                    }
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleAddSuggestedMilestone(s, idx)}
+                                                                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-[10px] shrink-0 transition"
+                                                            >
+                                                                ＋追加
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="bg-white/60 border border-slate-150 rounded-2xl p-4 shadow-sm">
