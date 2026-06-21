@@ -383,7 +383,12 @@
 
         const toTimeValue = (d = new Date()) => {
             const pad = n => String(n).padStart(2, '0');
-            return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+            const minutes = d.getMinutes();
+            const roundedMinutes = Math.round(minutes / 5) * 5;
+            const tempDate = new Date(d);
+            tempDate.setMinutes(roundedMinutes);
+            tempDate.setSeconds(0);
+            return `${pad(tempDate.getHours())}:${pad(tempDate.getMinutes())}`;
         };
 
         const combineDateTimeToJst = (dateStr, timeStr) => {
@@ -1070,8 +1075,23 @@ out center 20;`;
 
                 const parseElement = (el) => {
                     const tags = el.tags || {};
+                    // 閉店・閉鎖・廃止された施設を除外
+                    if (
+                        tags.historic === 'yes' ||
+                        tags.abandoned === 'yes' ||
+                        tags.closed === 'yes' ||
+                        tags.disused === 'yes' ||
+                        tags.tombstone === 'yes' ||
+                        tags.status === 'closed' ||
+                        tags.status === 'abandoned' ||
+                        tags.abandoned !== undefined ||
+                        tags.closed !== undefined
+                    ) {
+                        return null;
+                    }
                     const name = tags.name || tags['name:ja'] || tags.operator;
                     if (!name) return null;
+                    if (name.includes('閉店') || name.includes('閉鎖') || name.includes('跡地') || name.includes('焼肉たむら')) return null;
 
                     let elLat = el.lat, elLng = el.lon;
                     if ((elLat == null || elLng == null) && el.center) {
@@ -2568,7 +2588,7 @@ out center 20;`;
                                         <div className="flex space-x-2">
                                             <input type="date" value={editingGrowth.date} onChange={e => setEditingGrowth(prev => ({ ...prev, date: e.target.value }))}
                                                 className="w-[55%] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700" required />
-                                            <input type="time" value={editingGrowth.time} onChange={e => setEditingGrowth(prev => ({ ...prev, time: e.target.value }))}
+                                            <input type="time" step="300" value={editingGrowth.time} onChange={e => setEditingGrowth(prev => ({ ...prev, time: e.target.value }))}
                                                 className="w-[45%] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700" required />
                                         </div>
                                     </div>
@@ -2619,7 +2639,7 @@ out center 20;`;
                                                 <div className="flex space-x-2">
                                                     <input type="date" value={logDate} onChange={e => setLogDate(e.target.value)}
                                                         className="w-[55%] max-w-full box-border bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                                                    <input type="time" value={logTime} onChange={e => setLogTime(e.target.value)}
+                                                    <input type="time" step="300" value={logTime} onChange={e => setLogTime(e.target.value)}
                                                         className="w-[45%] max-w-full box-border bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                 </div>
                                                 <button type="button" onClick={() => { setLogDate(toDateValue()); setLogTime(toTimeValue()); }}
@@ -3037,6 +3057,13 @@ out center 20;`;
                                                         <a href={mapsUrl} target="_blank" className="p-1.5 bg-green-50 text-green-600 rounded-lg border border-green-100">
                                                             <Icon.Loc className="w-3.5 h-3.5" />
                                                         </a>
+                                                        <button
+                                                            onClick={() => setSelectedFacility(null)}
+                                                            className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-lg border border-slate-200 flex items-center justify-center transition active:scale-95"
+                                                            title="閉じる"
+                                                        >
+                                                            <span className="text-[10px] font-bold">✕</span>
+                                                        </button>
                                                     </div>
                                                 </div>
                                                 
@@ -3112,7 +3139,7 @@ out center 20;`;
                                                 <div className="flex space-x-2">
                                                     <input type="date" value={growthDate} onChange={e => setGrowthDate(e.target.value)}
                                                         className="w-[55%] max-w-full box-border appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                                                    <input type="time" value={growthTime} onChange={e => setGrowthTime(e.target.value)}
+                                                    <input type="time" step="300" value={growthTime} onChange={e => setGrowthTime(e.target.value)}
                                                         className="w-[45%] max-w-full box-border appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                 </div>
                                                 <button type="button" onClick={() => { setGrowthDate(toDateValue()); setGrowthTime(toTimeValue()); }}
@@ -3839,7 +3866,7 @@ out center 20;`;
                                         <div className="flex space-x-2">
                                             <input type="date" value={editingLog.date} onChange={e => setEditingLog({...editingLog, date: e.target.value})}
                                                 className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" required />
-                                            <input type="time" value={editingLog.time} onChange={e => setEditingLog({...editingLog, time: e.target.value})}
+                                            <input type="time" step="300" value={editingLog.time} onChange={e => setEditingLog({...editingLog, time: e.target.value})}
                                                 className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" required />
                                         </div>
                                     </div>
