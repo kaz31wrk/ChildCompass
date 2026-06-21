@@ -443,8 +443,10 @@ function getLogSuggestions(params) {
 function uniqueNums(arr) {
   const seen = {};
   return arr.filter(n => {
-    if (seen[n]) return false;
-    seen[n] = true;
+    const num = parseInt(n, 10);
+    if (isNaN(num) || num < 5 || num > 720) return false;
+    if (seen[num]) return false;
+    seen[num] = true;
     return true;
   }).slice(0, 10);
 }
