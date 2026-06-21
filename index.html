@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ChildCompass - 育児支援アプリ</title>
     <!-- Favicon & PWA Mobile App Meta Tags -->
-    <link rel="icon" type="image/png" href="https://kaz31wrk.github.io/ChildCompass/favicon.png?v=2">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' /><polyline points='9 22 9 12 15 12 15 22' /></svg>">
     <link rel="apple-touch-icon" href="https://kaz31wrk.github.io/ChildCompass/apple-touch-icon.png?v=2">
     <link rel="manifest" href="https://kaz31wrk.github.io/ChildCompass/manifest.json?v=2">
     <meta name="theme-color" content="#6366f1">
@@ -389,6 +389,22 @@
             tempDate.setMinutes(roundedMinutes);
             tempDate.setSeconds(0);
             return `${pad(tempDate.getHours())}:${pad(tempDate.getMinutes())}`;
+        };
+
+        const roundTimeTo5Min = (timeStr) => {
+            if (!timeStr) return '';
+            const parts = timeStr.split(':');
+            const hours = parseInt(parts[0], 10);
+            const minutes = parseInt(parts[1], 10);
+            if (isNaN(hours) || isNaN(minutes)) return timeStr;
+            let roundedMinutes = Math.round(minutes / 5) * 5;
+            let h = hours;
+            if (roundedMinutes >= 60) {
+                roundedMinutes = 0;
+                h = (h + 1) % 24;
+            }
+            const pad = n => String(n).padStart(2, '0');
+            return `${pad(h)}:${pad(roundedMinutes)}`;
         };
 
         const combineDateTimeToJst = (dateStr, timeStr) => {
@@ -2588,7 +2604,7 @@ out center 20;`;
                                         <div className="flex space-x-2">
                                             <input type="date" value={editingGrowth.date} onChange={e => setEditingGrowth(prev => ({ ...prev, date: e.target.value }))}
                                                 className="w-[55%] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700" required />
-                                            <input type="time" step="300" value={editingGrowth.time} onChange={e => setEditingGrowth(prev => ({ ...prev, time: e.target.value }))}
+                                            <input type="time" step="300" value={editingGrowth.time} onChange={e => setEditingGrowth(prev => ({ ...prev, time: roundTimeTo5Min(e.target.value) }))}
                                                 className="w-[45%] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700" required />
                                         </div>
                                     </div>
@@ -2639,7 +2655,7 @@ out center 20;`;
                                                 <div className="flex space-x-2">
                                                     <input type="date" value={logDate} onChange={e => setLogDate(e.target.value)}
                                                         className="w-[55%] max-w-full box-border bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                                                    <input type="time" step="300" value={logTime} onChange={e => setLogTime(e.target.value)}
+                                                    <input type="time" step="300" value={logTime} onChange={e => setLogTime(roundTimeTo5Min(e.target.value))}
                                                         className="w-[45%] max-w-full box-border bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                 </div>
                                                 <button type="button" onClick={() => { setLogDate(toDateValue()); setLogTime(toTimeValue()); }}
@@ -3139,7 +3155,7 @@ out center 20;`;
                                                 <div className="flex space-x-2">
                                                     <input type="date" value={growthDate} onChange={e => setGrowthDate(e.target.value)}
                                                         className="w-[55%] max-w-full box-border appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                                                    <input type="time" step="300" value={growthTime} onChange={e => setGrowthTime(e.target.value)}
+                                                    <input type="time" step="300" value={growthTime} onChange={e => setGrowthTime(roundTimeTo5Min(e.target.value))}
                                                         className="w-[45%] max-w-full box-border appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
                                                 </div>
                                                 <button type="button" onClick={() => { setGrowthDate(toDateValue()); setGrowthTime(toTimeValue()); }}
@@ -3866,7 +3882,7 @@ out center 20;`;
                                         <div className="flex space-x-2">
                                             <input type="date" value={editingLog.date} onChange={e => setEditingLog({...editingLog, date: e.target.value})}
                                                 className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" required />
-                                            <input type="time" step="300" value={editingLog.time} onChange={e => setEditingLog({...editingLog, time: e.target.value})}
+                                            <input type="time" step="300" value={editingLog.time} onChange={e => setEditingLog({...editingLog, time: roundTimeTo5Min(e.target.value)})}
                                                 className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" required />
                                         </div>
                                     </div>
