@@ -2604,8 +2604,33 @@ out center 20;`;
                                         <div className="flex space-x-2">
                                             <input type="date" value={editingGrowth.date} onChange={e => setEditingGrowth(prev => ({ ...prev, date: e.target.value }))}
                                                 className="w-[55%] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700" required />
-                                            <input type="time" step="300" value={editingGrowth.time} onChange={e => setEditingGrowth(prev => ({ ...prev, time: roundTimeTo5Min(e.target.value) }))}
-                                                className="w-[45%] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700" required />
+                                            <div className="w-[45%] flex items-center space-x-1 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 font-semibold text-slate-700 focus-within:ring-2 focus-within:ring-indigo-300">
+                                                <select
+                                                    value={editingGrowth.time.split(':')[0] || '00'}
+                                                    onChange={e => {
+                                                        const m = editingGrowth.time.split(':')[1] || '00';
+                                                        setEditingGrowth(prev => ({ ...prev, time: `${e.target.value}:${m}` }));
+                                                    }}
+                                                    className="bg-transparent focus:outline-none cursor-pointer w-full text-center appearance-none"
+                                                >
+                                                    {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
+                                                        <option key={h} value={h}>{h}時</option>
+                                                    ))}
+                                                </select>
+                                                <span className="text-slate-400 font-bold">:</span>
+                                                <select
+                                                    value={editingGrowth.time.split(':')[1] || '00'}
+                                                    onChange={e => {
+                                                        const h = editingGrowth.time.split(':')[0] || '00';
+                                                        setEditingGrowth(prev => ({ ...prev, time: `${h}:${e.target.value}` }));
+                                                    }}
+                                                    className="bg-transparent focus:outline-none cursor-pointer w-full text-center appearance-none"
+                                                >
+                                                    {Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0')).map(m => (
+                                                        <option key={m} value={m}>{m}分</option>
+                                                    ))}
+                                                </select>
+                                            </div>
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
@@ -2655,8 +2680,33 @@ out center 20;`;
                                                 <div className="flex space-x-2">
                                                     <input type="date" value={logDate} onChange={e => setLogDate(e.target.value)}
                                                         className="w-[55%] max-w-full box-border bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                                                    <input type="time" step="300" value={logTime} onChange={e => setLogTime(roundTimeTo5Min(e.target.value))}
-                                                        className="w-[45%] max-w-full box-border bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                                                    <div className="w-[45%] flex items-center space-x-1 bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-sm font-semibold text-slate-700 focus-within:ring-2 focus-within:ring-indigo-300">
+                                                        <select
+                                                            value={logTime.split(':')[0] || '00'}
+                                                            onChange={e => {
+                                                                const m = logTime.split(':')[1] || '00';
+                                                                setLogTime(`${e.target.value}:${m}`);
+                                                            }}
+                                                            className="bg-transparent focus:outline-none cursor-pointer w-full text-center appearance-none"
+                                                        >
+                                                            {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
+                                                                <option key={h} value={h}>{h}時</option>
+                                                            ))}
+                                                        </select>
+                                                        <span className="text-slate-400 font-bold">:</span>
+                                                        <select
+                                                            value={logTime.split(':')[1] || '00'}
+                                                            onChange={e => {
+                                                                const h = logTime.split(':')[0] || '00';
+                                                                setLogTime(`${h}:${e.target.value}`);
+                                                            }}
+                                                            className="bg-transparent focus:outline-none cursor-pointer w-full text-center appearance-none"
+                                                        >
+                                                            {Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0')).map(m => (
+                                                                <option key={m} value={m}>{m}分</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
                                                 </div>
                                                 <button type="button" onClick={() => { setLogDate(toDateValue()); setLogTime(toTimeValue()); }}
                                                     className="mt-1 text-[10px] text-indigo-600 font-semibold">今の時刻に戻す</button>
@@ -3155,8 +3205,33 @@ out center 20;`;
                                                 <div className="flex space-x-2">
                                                     <input type="date" value={growthDate} onChange={e => setGrowthDate(e.target.value)}
                                                         className="w-[55%] max-w-full box-border appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                                                    <input type="time" step="300" value={growthTime} onChange={e => setGrowthTime(roundTimeTo5Min(e.target.value))}
-                                                        className="w-[45%] max-w-full box-border appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                                                    <div className="w-[45%] flex items-center space-x-1 bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-sm font-semibold text-slate-700 focus-within:ring-2 focus-within:ring-indigo-300">
+                                                        <select
+                                                            value={growthTime.split(':')[0] || '00'}
+                                                            onChange={e => {
+                                                                const m = growthTime.split(':')[1] || '00';
+                                                                setGrowthTime(`${e.target.value}:${m}`);
+                                                            }}
+                                                            className="bg-transparent focus:outline-none cursor-pointer w-full text-center appearance-none"
+                                                        >
+                                                            {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
+                                                                <option key={h} value={h}>{h}時</option>
+                                                            ))}
+                                                        </select>
+                                                        <span className="text-slate-400 font-bold">:</span>
+                                                        <select
+                                                            value={growthTime.split(':')[1] || '00'}
+                                                            onChange={e => {
+                                                                const h = growthTime.split(':')[0] || '00';
+                                                                setGrowthTime(`${h}:${e.target.value}`);
+                                                            }}
+                                                            className="bg-transparent focus:outline-none cursor-pointer w-full text-center appearance-none"
+                                                        >
+                                                            {Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0')).map(m => (
+                                                                <option key={m} value={m}>{m}分</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
                                                 </div>
                                                 <button type="button" onClick={() => { setGrowthDate(toDateValue()); setGrowthTime(toTimeValue()); }}
                                                     className="mt-1 text-[10px] text-indigo-600 font-semibold">今の時刻に戻す</button>
@@ -3882,8 +3957,33 @@ out center 20;`;
                                         <div className="flex space-x-2">
                                             <input type="date" value={editingLog.date} onChange={e => setEditingLog({...editingLog, date: e.target.value})}
                                                 className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" required />
-                                            <input type="time" step="300" value={editingLog.time} onChange={e => setEditingLog({...editingLog, time: roundTimeTo5Min(e.target.value)})}
-                                                className="w-1/2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300" required />
+                                            <div className="w-1/2 flex items-center space-x-1 bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-sm font-semibold text-slate-700 focus-within:ring-2 focus-within:ring-indigo-300">
+                                                <select
+                                                    value={editingLog.time.split(':')[0] || '00'}
+                                                    onChange={e => {
+                                                        const m = editingLog.time.split(':')[1] || '00';
+                                                        setEditingLog({...editingLog, time: `${e.target.value}:${m}`});
+                                                    }}
+                                                    className="bg-transparent focus:outline-none cursor-pointer w-full text-center appearance-none"
+                                                >
+                                                    {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
+                                                        <option key={h} value={h}>{h}時</option>
+                                                    ))}
+                                                </select>
+                                                <span className="text-slate-400 font-bold">:</span>
+                                                <select
+                                                    value={editingLog.time.split(':')[1] || '00'}
+                                                    onChange={e => {
+                                                        const h = editingLog.time.split(':')[0] || '00';
+                                                        setEditingLog({...editingLog, time: `${h}:${e.target.value}`});
+                                                    }}
+                                                    className="bg-transparent focus:outline-none cursor-pointer w-full text-center appearance-none"
+                                                >
+                                                    {Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0')).map(m => (
+                                                        <option key={m} value={m}>{m}分</option>
+                                                    ))}
+                                                </select>
+                                            </div>
                                         </div>
                                     </div>
                                     <div>
