@@ -20,6 +20,10 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
      - デプロイID: `AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw`
      - 実行コマンド: `clasp deploy -i AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw -d "Description (変更内容)"`
      - WebアプリURL: `https://script.google.com/macros/s/AKfycbwczk4hGoCM2d0SIA_MZbdPlg452xqmYSske15AjxxsDEAIY7jWmhoJUWUSzi9koYw/exec`
+     - macOS 標準の `sips` コマンドを使用し、再設計した `Untitled.svg` からアプリアイコン画像 (`favicon.png`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`) を透過 PNG として各解像度（1024x1024、192x192、512x512）で書き出し、一括置換。
+     - ユーザーより提供された白背景付き角丸アプリアイコン用SVG `apple-touch-icon.svg` を元に、`sips` を用いて `apple-touch-icon.png` (1024x1024) を生成し上書き置換。
+     - ログイン画面に古い「家のアイコン」のインライン SVG が直接ハードコードされていた実装を、新しい `apple-touch-icon.png` を読み込む仕様に刷新し、ログイン画面のロゴマークを完全更新。
+     - iOS Safari などでブラウザタブのアイコン（favicon）が反映されない問題に対処するため、`index.html` および `manifest.json` 内のキャッシュバスタークエリパラメータを `?v=5` にインクリメント。さらに `Code.js` の `doGet` で GAS の `HtmlOutput` に対して `.setFaviconUrl()` API を明示的に呼び出して適用するよう改修し、GAS環境下でのファビコン動作を堅牢化。
   2. **GitHub Pagesへのデプロイ**: 上記に加え、必ず変更をGitにコミットし、`main` ブランチへ `git push` を行ってください。これにより以下のURL（GitHub Pages）にもフロントエンドの変更が反映されます。
      - GitHub Pages URL: `https://kaz31wrk.github.io/ChildCompass/`
 
@@ -33,6 +37,9 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
   - 屋根の線端や壁の角丸を美しく調整し、コンパスの針を白で塗りつぶしたうえで、右上半分（N極）に影と方向性を示す濃いインディゴ色（#4f46e5）の塗り分けを追加。
   - 背景の白塗り rect を削除（透過処理）し、テーマカラー `#6366f1` を生かした高品質で完全透過なベクターロゴとして再生成。
   - macOS 標準の `sips` コマンドを使用し、再設計した `Untitled.svg` からアプリアイコン画像 (`favicon.png`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`) を透過 PNG として各解像度（1024x1024、192x192、512x512）で書き出し、一括置換。
+  - ユーザーより提供された白背景付き角丸アプリアイコン用SVG `apple-touch-icon.svg` を元に、`sips` を用いて `apple-touch-icon.png` (1024x1024) を生成し上書き置換。
+  - ログイン画面に古い「家のアイコン」のインライン SVG が直接ハードコードされていた実装を、新しい `apple-touch-icon.png` を読み込む仕様に刷新し、ログイン画面のロゴマークを完全更新。
+  - iOS Safari などでブラウザタブのアイコン（favicon）が反映されない問題に対処するため、`index.html` および `manifest.json` 内のキャッシュバスタークエリパラメータを `?v=5` にインクリメント。さらに `Code.js` の `doGet` で GAS の `HtmlOutput` に対して `.setFaviconUrl()` API を明示的に呼び出して適用するよう改修し、GAS環境下でのファビコン動作を堅牢化。
 
 ### 2026-06-21 (アセット変更：アイコン画像の背景透過処理とテーマカラー適用)
 
@@ -683,3 +690,9 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
   2. 編集機能 (`editLog`) の実装: 「すべての履歴を見る」画面に編集ボタンを追加し、編集モーダル (`editingLog`) を実装。既存のGAS側の `updateLog_` エンドポイントを呼び出し、更新を即座にUIに反映できるようにした。
   3. OCRフォールバックの強化: Gemini API による JSON 解析に失敗（パースエラー等）した場合、破棄せず画像から読み取った生テキストをメモ欄 (`note`) に格納し、手動修正へ繋げられるように改善。
   4. `clasp push` および上書きデプロイ (バージョン `@58`) を完了。
+
+### 2026-06-22 (iOS用アプリアイコンの最適化)
+
+- **対応**:
+  - `Images/apple-touch-icon.svg` の角丸設定を削除し、純粋な正方形として再定義。
+  - `sips` コマンドで透過の無い完全な正方形の `apple-touch-icon.png` を再生成し、iOSでの表示時（PWA追加時など）に角が黒くなる問題を防止。
