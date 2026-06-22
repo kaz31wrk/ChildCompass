@@ -4,12 +4,12 @@
   "description": "GASとReactで育児ライフログ・AIトリアージ・成長曲線を管理する育児支援アプリケーション",
   "icons": [
     {
-      "src": "https://kaz31wrk.github.io/ChildCompass/Images/icon-192.png?v=4",
+      "src": "https://kaz31wrk.github.io/ChildCompass/Images/icon-192.png?v=6",
       "type": "image/png",
       "sizes": "192x192"
     },
     {
-      "src": "https://kaz31wrk.github.io/ChildCompass/Images/icon-512.png?v=4",
+      "src": "https://kaz31wrk.github.io/ChildCompass/Images/icon-512.png?v=6",
       "type": "image/png",
       "sizes": "512x512"
     }

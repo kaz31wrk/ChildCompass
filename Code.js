@@ -21,6 +21,7 @@ function doGet(e) {
       return HtmlService.createTemplateFromFile('index')
         .evaluate()
         .setTitle('ChildCompass')
+        .setFaviconUrl('https://kaz31wrk.github.io/ChildCompass/Images/favicon.png?v=6')
         .addMetaTag('viewport', 'width=device-width, initial-scale=1');
     }
     
