@@ -29,6 +29,14 @@ GAS (Google Apps Script) と React を組み合わせた育児支援アプリケ
 
 ## 修正履歴
 
+### 2026-06-22 (アセット修正：iOS Safariアイコンおよびトップページロゴのパス修正)
+
+- **対応**:
+  - `index.html` のヘッダーにある `<link rel="apple-touch-icon">` や `<link rel="icon">` の `href` 属性から、キャッシュバスターである `?v=6` クエリパラメータを削除。iOS Safari等でクエリパラメータが含まれていると正しくアイコンが認識されない問題に対処。
+  - `manifest.json` 内の `icons` のパス、および `Code.js` の `setFaviconUrl` で指定している画像パスからも `?v=6` を削除。
+  - 以前のアプリアイコン名リネーム（`-v2.png` から `-v6.png`）時に更新が漏れていた、トップページの `<img src=".../apple-touch-icon-v2.png">` および `<img src=".../icon-192-v2.png">` を正しい `v6.png` に修正し、リンク切れ（404）による画像非表示バグを解消。
+  - GitHub Pages へのデプロイ（`git push`）および GAS 環境へのデプロイ（`clasp push && clasp deploy`）を実行。
+
 ### 2026-06-22 (アセット修正：ロゴ画像 Untitled.svg の完全ベクター化と解像度改善)
 
 - **対応**:
