@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="master-artboard" viewBox="0 0 1024 1024" width="1024px" height="1024px" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <!-- 背景透過 (白背景のrectは削除し、透過対応とします) -->
+  <g>
+    <!-- 屋根: 45度の対称形、太い線で角丸 -->
+    <path d="M 160 500 L 512 148 L 864 500" 
+          fill="none" 
+          stroke="#6366f1" 
+          stroke-width="96" 
+          stroke-linecap="round" 
+          stroke-linejoin="round" />
+    
+    <!-- 壁とコンパスの針（evenodd フィルルールで穴あきを表現）
+         1. 壁の外枠（時計回り）
+         2. コンパスの針の外枠（反時計回り、45度の対称形）
+         3. コンパス中央の円（時計回り）
+    -->
+    <path d="M 512 256 L 794 538 L 794 850 A 60 60 0 0 1 734 910 L 290 910 A 60 60 0 0 1 230 850 L 230 538 Z 
+             M 712 460 Q 588 732 312 860 Q 436 588 712 460 Z
+             M 512 606 A 54 54 0 1 1 511.9 606 Z"
+          fill="#6366f1" 
+          fill-rule="evenodd" />
+  </g>
+</svg>
